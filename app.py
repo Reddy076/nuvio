@@ -257,29 +257,37 @@ def get_manifest():
 @app.get("/debug")
 def debug_endpoint():
     """Diagnostic endpoint to inspect live scraper connectivity."""
-    import traceback
-    res = {"mirrors": {}}
-    for m in scraper.MIRRORS:
-        url = f"{m}/en/uncensored-leak"
-        try:
-            r = scraper.requests.get(url, headers=scraper.HEADERS, impersonate="chrome124", timeout=6)
-            cards = scraper.parse_video_cards(r.text)
-            res["mirrors"][m] = {"status": r.status_code, "len": len(r.text), "cards": len(cards), "sample": r.text[:200]}
-        except Exception as e:
-            res["mirrors"][m] = {"error": str(e)}
-
-    try:
-        cat = scraper.fetch_catalog("missav_uncensored", page=1)
-        res["fetch_catalog_len"] = len(cat)
-    except Exception as e:
-        res["fetch_catalog_err"] = str(e)
-
-    try:
-        info = scraper.get_video_stream_info("nhdtb-213-uncensored-leak")
-        res["stream_info"] = info
-    except Exception as e:
-        res["stream_err"] = str(e)
-
+    candidates = [
+        "https://missav.ws",
+        "https://missav.ai",
+        "https://missav.live",
+        "https://missav.fans",
+        "https://missav.media",
+        "https://missav01.com",
+        "https://missav123.com",
+    ]
+    impersonates = ["chrome124", "safari17_0", "chrome120"]
+    res = {}
+    for c in candidates:
+        for imp in impersonates:
+            key = f"{c}_{imp}"
+            try:
+                r = scraper.requests.get(
+                    f"{c}/en/uncensored-leak",
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                    impersonate=imp,
+                    timeout=5,
+                )
+                cards = scraper.parse_video_cards(r.text)
+                res[key] = {"status": r.status_code, "len": len(r.text), "cards": len(cards)}
+                if len(cards) > 0:
+                    break
+            except Exception as e:
+                res[key] = {"error": str(e)}
     return JSONResponse(res)
 
 
