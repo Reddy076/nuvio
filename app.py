@@ -60,7 +60,7 @@ SORT_OPTIONS = [
 
 MANIFEST = {
     "id": "community.missav",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "name": "MissAV",
     "description": "Watch MissAV releases, uncensored videos, and search directly in Nuvio",
     "logo": "https://missav.ws/img/flags/united-kingdom.png",
@@ -403,11 +403,26 @@ def get_stream(type: str, id: str, request: Request):
 
     streams = []
 
-    # 1. Adaptive HLS as the PRIMARY default stream (Auto Quality).
-    # Plays seamlessly across all videos, adapts automatically to network conditions,
-    # and handles all origin variant folder structures (e.g. 1280x720) without 404s!
+    # 1. Direct Video Download & Streaming (Direct MP4 container format)
+    # Compatible with Nuvio's 1-Click Download, Offline Downloader, and external downloaders (1DM, ADM).
+    # Placed first so Nuvio's downloader immediately identifies an MP4 direct stream instead of rejecting HLS.
+    for v in variants:
+        q = v["quality"]
+        label = quality_labels.get(q, f"🎬 {q}")
+        filename = f"{clean_slug}_{q}.mp4"
+        streams.append({
+            "name": f"MissAV {q} [Download]",
+            "title": f"{info['title']}\n💾 {label} (Direct MP4 / Download)",
+            "url": f"{base_url}/proxy/download/{uuid}/{q}/video.mp4",
+            "behaviorHints": {
+                "notWebReady": False,
+                "filename": filename,
+            },
+        })
+
+    # 2. Adaptive HLS as secondary stream for live adaptive playback
     streams.append({
-        "name": "MissAV [Proxied]",
+        "name": "MissAV [Auto HLS]",
         "title": f"{info['title']}\n⚡ Auto Quality (Adaptive HLS)",
         "url": f"{base_url}/proxy/m3u8/{uuid}/playlist.m3u8",
         "behaviorHints": {
@@ -415,29 +430,15 @@ def get_stream(type: str, id: str, request: Request):
         },
     })
 
-    # 2. Direct single-resolution streams using exact CDN subpaths (e.g. 1280x720/video.m3u8 or 720p/video.m3u8)
+    # 3. Direct single-resolution HLS streams using exact CDN subpaths
     for v in variants:
         q = v["quality"]
         v_path = v["path"]
         label = quality_labels.get(q, f"🎬 {q}")
         streams.append({
-            "name": "MissAV [Proxied]",
-            "title": f"{info['title']}\n{label}",
+            "name": "MissAV [HLS]",
+            "title": f"{info['title']}\n{label} (HLS)",
             "url": f"{base_url}/proxy/m3u8/{uuid}/{v_path}",
-            "behaviorHints": {
-                "notWebReady": False,
-            },
-        })
-
-    # 3. Direct Video Download Streams (Compatible with Nuvio's Offline Downloader & 1DM/ADM)
-    for v in variants:
-        q = v["quality"]
-        v_path = v["path"]
-        label = quality_labels.get(q, f"🎬 {q}")
-        streams.append({
-            "name": "MissAV [Download]",
-            "title": f"{info['title']}\n💾 {label} (Direct MP4 / Download)",
-            "url": f"{base_url}/proxy/download/{uuid}/{v_path}",
             "behaviorHints": {
                 "notWebReady": False,
             },
@@ -664,33 +665,34 @@ def proxy_download(uuid: str, path: str, request: Request):
     }
     sess = scraper.get_session()
 
-    # Build candidate paths: requested path, variants, and standard fallbacks
+    # Determine requested target resolution from path
+    clean_path = path.lower()
+    target_quality = "720p"
+    if "1080" in clean_path:
+        target_quality = "1080p"
+    elif "720" in clean_path:
+        target_quality = "720p"
+    elif "480" in clean_path:
+        target_quality = "480p"
+    elif "360" in clean_path:
+        target_quality = "360p"
+
     candidate_paths = []
+    # If path directly specified an m3u8 playlist path, try it first
     if path.endswith(".m3u8"):
         candidate_paths.append(path)
-    elif "/" not in path:
-        candidate_paths.append(f"{path}/video.m3u8")
 
-    aliases = {
-        "1080p/": ["1920x1080/"],
-        "1920x1080/": ["1080p/"],
-        "720p/": ["1280x720/"],
-        "1280x720/": ["720p/"],
-        "480p/": ["842x480/", "854x480/"],
-        "842x480/": ["480p/", "854x480/"],
-        "854x480/": ["480p/", "842x480/"],
-        "360p/": ["640x360/"],
-        "640x360/": ["360p/"],
-    }
-    for p in list(candidate_paths):
-        for prefix, alt_prefixes in aliases.items():
-            if p.startswith(prefix):
-                for alt_p in alt_prefixes:
-                    alt = p.replace(prefix, alt_p, 1)
-                    if alt not in candidate_paths:
-                        candidate_paths.append(alt)
-                break
+    # Resolution aliases for target quality
+    if target_quality == "1080p":
+        candidate_paths.extend(["1080p/video.m3u8", "1920x1080/video.m3u8"])
+    elif target_quality == "720p":
+        candidate_paths.extend(["1280x720/video.m3u8", "720p/video.m3u8"])
+    elif target_quality == "480p":
+        candidate_paths.extend(["842x480/video.m3u8", "854x480/video.m3u8", "480p/video.m3u8"])
+    elif target_quality == "360p":
+        candidate_paths.extend(["640x360/video.m3u8", "360p/video.m3u8"])
 
+    # Fallback to all available variants from scraper if requested resolution is unavailable
     variants = scraper.get_available_variants(uuid)
     for v in variants:
         if v["path"] not in candidate_paths:
@@ -726,28 +728,75 @@ def proxy_download(uuid: str, path: str, request: Request):
 
     quality = chosen_dir
 
+    # Accurate size calculation for Nuvio & Android DownloadManager
+    cache_dict = _SEGMENT_SIZES_CACHE.setdefault((uuid, quality), {})
+    default_seg_sizes = {
+        "1080p": 1220000,
+        "1920x1080": 1220000,
+        "720p": 580000,
+        "1280x720": 580000,
+        "480p": 310000,
+        "842x480": 310000,
+        "854x480": 310000,
+        "360p": 190000,
+        "640x360": 190000,
+    }
+    avg_size = default_seg_sizes.get(quality, 750000)
+    if cache_dict:
+        avg_size = int(sum(cache_dict.values()) / len(cache_dict))
+    elif "video0.jpeg" in segment_names:
+        try:
+            head_r = sess.head(f"https://surrit.com/{uuid}/{quality}/video0.jpeg", headers=headers, timeout=3)
+            if head_r.status_code == 200 and "content-length" in head_r.headers:
+                avg_size = int(head_r.headers["content-length"])
+                cache_dict["video0.jpeg"] = avg_size
+        except Exception:
+            pass
+
+    total_size = len(segment_names) * avg_size
+
     # Parse HTTP Range header if requested
     range_header = request.headers.get("range")
     start_byte = 0
     end_byte = None
+    is_range = False
     if range_header:
         m = re.search(r"bytes=(\d+)-(\d*)", range_header)
         if m:
+            is_range = True
             start_byte = int(m.group(1))
             if m.group(2):
                 end_byte = int(m.group(2))
 
-    cache_dict = _SEGMENT_SIZES_CACHE.setdefault((uuid, quality), {})
+    if end_byte is None or end_byte >= total_size:
+        end_byte = total_size - 1
+
+    if is_range:
+        content_length = max(0, end_byte - start_byte + 1)
+        status_code = 206
+    else:
+        content_length = total_size
+        status_code = 200
+
+    resp_headers = {
+        "Content-Type": "video/mp4",
+        "Content-Disposition": f'attachment; filename="{uuid}_{quality}.mp4"',
+        "Content-Length": str(content_length),
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type, Content-Range, Content-Length, Accept-Ranges",
+    }
+    if is_range:
+        resp_headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
+
+    if request.method == "HEAD":
+        return Response(status_code=status_code, headers=resp_headers)
+
     start_seg_idx = 0
     intra_offset = 0
 
     if start_byte > 0:
         cum = 0
-        avg_size = (
-            int(sum(cache_dict.values()) / len(cache_dict))
-            if cache_dict
-            else (1200000 if quality == "1080p" else 750000)
-        )
         for idx, seg_name in enumerate(segment_names):
             size = cache_dict.get(seg_name, avg_size)
             if cum + size > start_byte:
@@ -756,25 +805,9 @@ def proxy_download(uuid: str, path: str, request: Request):
                 break
             cum += size
 
-    is_range = (start_byte > 0 or end_byte is not None)
-    status_code = 206 if is_range else 200
-
-    resp_headers = {
-        "Content-Type": "video/mp4",
-        "Content-Disposition": f'attachment; filename="{uuid}_{quality}.mp4"',
-        "Accept-Ranges": "bytes",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type, Content-Range, Accept-Ranges",
-    }
-    if is_range:
-        # Compatible with Nuvio's regex: bytes (\d+)-(\d+)/(\d+|\*)
-        resp_headers["Content-Range"] = f"bytes {start_byte}-{start_byte + 9999999999}/*"
-
-    if request.method == "HEAD":
-        return Response(status_code=status_code, headers=resp_headers)
-
     def iter_video():
         bytes_sent = 0
+        max_bytes_to_send = content_length if is_range else None
         for idx in range(start_seg_idx, len(segment_names)):
             seg_name = segment_names[idx]
             seg_path = f"{quality}/{seg_name}"
@@ -791,8 +824,8 @@ def proxy_download(uuid: str, path: str, request: Request):
             else:
                 out = chunk_data
 
-            if end_byte is not None:
-                remaining = (end_byte - start_byte + 1) - bytes_sent
+            if max_bytes_to_send is not None:
+                remaining = max_bytes_to_send - bytes_sent
                 if remaining <= 0:
                     break
                 if len(out) > remaining:
