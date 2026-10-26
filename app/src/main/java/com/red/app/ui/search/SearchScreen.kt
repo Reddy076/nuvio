@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -31,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,22 +78,71 @@ fun SearchScreen(
     var searchQuery by remember { mutableStateOf("") }
     var allLoadedItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+    var currentPage by remember { mutableStateOf(1) }
+    var canLoadMore by remember { mutableStateOf(true) }
 
     var selectedType by remember { mutableStateOf("All") }
     var selectedSort by remember { mutableStateOf("views") }
 
+    val gridState = rememberLazyGridState()
+
+    // 1. Initial Page / Query / Sort Change
     LaunchedEffect(searchQuery, selectedSort) {
         if (searchQuery.isNotBlank()) {
-            delay(250) // Debounce keystrokes
+            delay(300) // Debounce keystrokes
         }
         isLoading = true
+        currentPage = 1
+        canLoadMore = true
         val base = if (searchQuery.isNotBlank()) {
-            MissAvRepository.search(searchQuery, sort = selectedSort)
+            MissAvRepository.search(searchQuery, sort = selectedSort, page = 1)
         } else {
-            MissAvRepository.getDiscoverItems(sort = selectedSort)
+            MissAvRepository.getDiscoverItems(sort = selectedSort, page = 1)
         }
         allLoadedItems = base
+        if (base.isEmpty()) {
+            canLoadMore = false
+        }
         isLoading = false
+        try {
+            gridState.scrollToItem(0)
+        } catch (ignored: Throwable) {}
+    }
+
+    // 2. Infinite Scroll: Detect when user reaches near end of list
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val layoutInfo = gridState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            totalItems > 0 && lastVisible >= totalItems - 6
+        }
+    }
+
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore && !isLoading && !isLoadingMore && canLoadMore && allLoadedItems.isNotEmpty()) {
+            isLoadingMore = true
+            val nextPage = currentPage + 1
+            val nextBatch = if (searchQuery.isNotBlank()) {
+                MissAvRepository.search(searchQuery, sort = selectedSort, page = nextPage)
+            } else {
+                MissAvRepository.getDiscoverItems(sort = selectedSort, page = nextPage)
+            }
+            if (nextBatch.isNotEmpty()) {
+                val existingIds = allLoadedItems.map { it.id }.toSet()
+                val newItems = nextBatch.filter { !existingIds.contains(it.id) }
+                if (newItems.isNotEmpty()) {
+                    allLoadedItems = allLoadedItems + newItems
+                    currentPage = nextPage
+                } else {
+                    canLoadMore = false
+                }
+            } else {
+                canLoadMore = false
+            }
+            isLoadingMore = false
+        }
     }
 
     val displayedItems = remember(allLoadedItems, selectedType) {
@@ -101,7 +153,7 @@ fun SearchScreen(
                 it.id.contains("chinese") ||
                 it.title.contains("Chinese", ignoreCase = true)
             }
-            "Recent" -> allLoadedItems.take(30)
+            "Recent" -> allLoadedItems.take(50)
             else -> allLoadedItems
         }
     }
@@ -359,17 +411,38 @@ fun SearchScreen(
             }
         } else {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Fixed(3),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 100.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(displayedItems) { item ->
+                items(
+                    items = displayedItems,
+                    key = { it.id }
+                ) { item ->
                     DiscoverGridPosterItem(
                         item = item,
                         onClick = { onItemClick(item) }
                     )
+                }
+
+                if (isLoadingMore) {
+                    item(span = { GridItemSpan(3) }) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = Color(0xFFE50914),
+                                strokeWidth = 2.5.dp
+                            )
+                        }
+                    }
                 }
             }
         }

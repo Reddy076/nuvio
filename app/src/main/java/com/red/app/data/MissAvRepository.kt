@@ -20,7 +20,7 @@ object MissAvRepository {
 
     private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     private const val MISSAV_REFERER = "https://missav.ws/"
-    const val DEFAULT_ADDON_URL = "http://127.0.0.1:7000"
+    const val DEFAULT_ADDON_URL = "https://nuvio-c4dd.onrender.com"
 
     private var appContext: Context? = null
     var addonBaseUrl: String = DEFAULT_ADDON_URL
@@ -57,7 +57,13 @@ object MissAvRepository {
     private fun loadPreferences(context: Context) {
         try {
             val prefs = context.getSharedPreferences("nuvio_missav_prefs", Context.MODE_PRIVATE)
-            addonBaseUrl = prefs.getString("addon_url", DEFAULT_ADDON_URL) ?: DEFAULT_ADDON_URL
+            val saved = prefs.getString("addon_url", DEFAULT_ADDON_URL) ?: DEFAULT_ADDON_URL
+            addonBaseUrl = if (saved.contains("127.0.0.1") || saved.contains("localhost")) {
+                DEFAULT_ADDON_URL
+            } else {
+                saved
+            }
+            addonSources[0] = addonSources[0].copy(manifestUrl = "$addonBaseUrl/manifest.json")
             val savedWatchlist = prefs.getStringSet("watchlist", emptySet()) ?: emptySet()
             watchlistSlugs.addAll(savedWatchlist)
         } catch (ignored: Throwable) {}
@@ -225,36 +231,44 @@ object MissAvRepository {
         )
     }
 
-    suspend fun search(query: String, sort: String = "views"): List<MediaItem> = withContext(Dispatchers.IO) {
+    suspend fun search(query: String, sort: String = "views", page: Int = 1): List<MediaItem> = withContext(Dispatchers.IO) {
         val q = query.trim().lowercase()
         if (q.isBlank()) {
-            return@withContext getDiscoverItems(sort)
+            return@withContext getDiscoverItems(sort, page)
         }
 
-        // 1. Try querying Addon live search endpoint with sort
-        val remoteResults = fetchSearchFromAddon(q, sort)
+        // 1. Try querying Addon live search endpoint with sort and page
+        val remoteResults = fetchSearchFromAddon(q, sort, page)
         if (remoteResults.isNotEmpty()) {
             return@withContext remoteResults
         }
 
-        // 2. Query offline / local real MissAV database with sorting
-        val filtered = allVideosMap.values.filter {
-            it.code.lowercase().contains(q) ||
-            it.title.lowercase().contains(q) ||
-            it.slug().contains(q) ||
-            it.actresses.any { a -> a.lowercase().contains(q) } ||
-            it.genre.lowercase().contains(q)
+        // 2. Query offline / local real MissAV database with sorting (page 1 only)
+        if (page == 1) {
+            val filtered = allVideosMap.values.filter {
+                it.code.lowercase().contains(q) ||
+                it.title.lowercase().contains(q) ||
+                it.slug().contains(q) ||
+                it.actresses.any { a -> a.lowercase().contains(q) } ||
+                it.genre.lowercase().contains(q)
+            }
+            sortLocalItems(filtered, sort)
+        } else {
+            emptyList()
         }
-        sortLocalItems(filtered, sort)
     }
 
-    suspend fun getDiscoverItems(sort: String = "views"): List<MediaItem> = withContext(Dispatchers.IO) {
+    suspend fun getDiscoverItems(sort: String = "views", page: Int = 1): List<MediaItem> = withContext(Dispatchers.IO) {
         // Try live catalog with sort from addon
-        val remote = fetchCatalogFromAddonWithSort("missav_uncensored", sort)
+        val remote = fetchCatalogFromAddonWithSort("missav_uncensored", sort, page)
         if (!remote.isNullOrEmpty()) {
             return@withContext remote
         }
-        sortLocalItems(allVideosMap.values.toList(), sort)
+        if (page == 1) {
+            sortLocalItems(allVideosMap.values.toList(), sort)
+        } else {
+            emptyList()
+        }
     }
 
     private fun sortLocalItems(items: List<MediaItem>, sort: String): List<MediaItem> {
@@ -343,14 +357,30 @@ object MissAvRepository {
         }
     }
 
-    private fun fetchSearchFromAddon(query: String, sort: String = "views"): List<MediaItem> {
+    private fun fetchSearchFromAddon(query: String, sort: String = "views", page: Int = 1): List<MediaItem> {
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val encodedSort = URLEncoder.encode(sort, "UTF-8")
-            val url = URL("$addonBaseUrl/catalog/movie/missav_uncensored/search=$encoded&sort=$encodedSort.json")
+            // Try direct /search endpoint with sort and page
+            try {
+                val directUrl = URL("$addonBaseUrl/search?q=$encoded&sort=$encodedSort&page=$page")
+                val conn = directUrl.openConnection() as HttpURLConnection
+                conn.connectTimeout = 4000
+                conn.readTimeout = 6000
+                conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                if (conn.responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val items = parseMetasJson(body)
+                    if (items.isNotEmpty()) return items
+                }
+            } catch (ignored: Throwable) {}
+
+            // Stremio skip fallback: skip = (page - 1) * 12
+            val skip = (page - 1) * 12
+            val url = URL("$addonBaseUrl/catalog/movie/missav_uncensored/search=$encoded&sort=$encodedSort&skip=$skip.json")
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 4000
+            conn.connectTimeout = 4000
+            conn.readTimeout = 6000
             conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
             if (conn.responseCode == 200) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -363,13 +393,14 @@ object MissAvRepository {
         }
     }
 
-    private fun fetchCatalogFromAddonWithSort(catalogId: String, sort: String): List<MediaItem>? {
+    private fun fetchCatalogFromAddonWithSort(catalogId: String, sort: String, page: Int = 1): List<MediaItem>? {
         return try {
             val encodedSort = URLEncoder.encode(sort, "UTF-8")
-            val url = URL("$addonBaseUrl/catalog/movie/$catalogId/sort=$encodedSort.json")
+            val skip = (page - 1) * 12
+            val url = URL("$addonBaseUrl/catalog/movie/$catalogId/sort=$encodedSort&skip=$skip.json")
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 4000
+            conn.connectTimeout = 4000
+            conn.readTimeout = 6000
             conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
             if (conn.responseCode == 200) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
