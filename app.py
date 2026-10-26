@@ -7,6 +7,7 @@ import re
 import os
 import time
 import urllib.parse
+from typing import Dict, Tuple, Optional
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
@@ -254,6 +255,10 @@ def get_manifest():
     return JSONResponse(MANIFEST)
 
 
+# In-memory cache for segment sizes to make HTTP Range lookups instant
+_SEGMENT_SIZES_CACHE: Dict[Tuple[str, str], Dict[str, int]] = {}
+
+
 @app.get("/health")
 @app.get("/debug")
 def health_endpoint():
@@ -284,6 +289,16 @@ def health_endpoint():
         "catalog_items": len(cat),
         "surrit": surrit_res,
     })
+
+
+@app.get("/debug/logs")
+def debug_logs():
+    """Returns the latest 200 lines from access.log."""
+    if not os.path.exists(LOG_FILE):
+        return Response("No logs found", media_type="text/plain")
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    return Response("".join(lines[-200:]), media_type="text/plain")
 
 
 
@@ -592,8 +607,9 @@ def proxy_ts(uuid: str, path: str, request: Request):
 @app.api_route("/proxy/download/{uuid}/{path:path}", methods=["GET", "HEAD"])
 def proxy_download(uuid: str, path: str, request: Request):
     """
-    Direct Video Download Endpoint (MP4 container format).
+    Direct Video Download Endpoint (MP4 container format) with HTTP 206 Partial Content support.
     Sequentially streams video segments as a continuous video file.
+    Supports HTTP Range requests (resuming partial downloads) so interruptions never wipe downloaded bytes.
     Enables Nuvio's internal download manager and external downloaders (1DM, ADM, browser)
     to download full offline movies directly.
     """
@@ -612,11 +628,13 @@ def proxy_download(uuid: str, path: str, request: Request):
         "Accept": "*/*",
     }
 
-    session = scraper.get_session()
     try:
-        r = session.get(surrit_url, headers=headers, timeout=10)
-        if r.status_code == 403:
-            r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+        # Use Safari TLS impersonation to bypass Cloudflare
+        sess = scraper.requests.Session(impersonate="safari17_0")
+        r = sess.get(surrit_url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            # Fallback to shared scraper session
+            r = scraper.get_session().get(surrit_url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise HTTPException(status_code=r.status_code, detail="Failed to fetch segment list")
     except Exception as e:
@@ -631,35 +649,110 @@ def proxy_download(uuid: str, path: str, request: Request):
     if not segment_names:
         raise HTTPException(status_code=404, detail="No video segments found")
 
+    # Parse HTTP Range header if requested
+    range_header = request.headers.get("range")
+    start_byte = 0
+    end_byte = None
+    if range_header:
+        m = re.search(r"bytes=(\d+)-(\d*)", range_header)
+        if m:
+            start_byte = int(m.group(1))
+            if m.group(2):
+                end_byte = int(m.group(2))
+
+    cache_dict = _SEGMENT_SIZES_CACHE.setdefault((uuid, quality), {})
+    start_seg_idx = 0
+    intra_offset = 0
+
+    if start_byte > 0:
+        cum = 0
+        sess_head = scraper.requests.Session(impersonate="safari17_0")
+        for idx, seg_name in enumerate(segment_names):
+            size = cache_dict.get(seg_name)
+            if size is None:
+                try:
+                    head_r = sess_head.head(
+                        f"https://surrit.com/{uuid}/{quality}/{seg_name}",
+                        headers=headers,
+                        timeout=5,
+                    )
+                    if head_r.status_code == 200 and "content-length" in head_r.headers:
+                        size = int(head_r.headers["content-length"])
+                    else:
+                        size = 750000
+                except Exception:
+                    size = 750000
+                cache_dict[seg_name] = size
+
+            if cum + size > start_byte:
+                start_seg_idx = idx
+                intra_offset = start_byte - cum
+                break
+            cum += size
+
+    is_range = (start_byte > 0 or end_byte is not None)
+    status_code = 206 if is_range else 200
+
     resp_headers = {
         "Content-Type": "video/mp4",
         "Content-Disposition": f'attachment; filename="{uuid}_{quality}.mp4"',
-        "Accept-Ranges": "none",
+        "Accept-Ranges": "bytes",
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type",
+        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type, Content-Range, Accept-Ranges",
     }
+    if is_range:
+        # Compatible with Nuvio's regex: bytes (\d+)-(\d+)/(\d+|\*)
+        resp_headers["Content-Range"] = f"bytes {start_byte}-{start_byte + 9999999999}/*"
 
     if request.method == "HEAD":
-        return Response(status_code=200, headers=resp_headers)
+        return Response(status_code=status_code, headers=resp_headers)
 
     def iter_video():
-        sess = scraper.get_session()
-        for seg_name in segment_names:
+        # Dedicated persistent session with Safari TLS impersonation for HTTP/2 multiplexing
+        dl_sess = scraper.requests.Session(impersonate="safari17_0")
+        bytes_sent = 0
+        for idx in range(start_seg_idx, len(segment_names)):
+            seg_name = segment_names[idx]
             seg_url = f"https://surrit.com/{uuid}/{quality}/{seg_name}"
-            try:
-                seg_r = sess.get(seg_url, headers=headers, timeout=15)
-                if seg_r.status_code == 200:
-                    yield seg_r.content
-                elif seg_r.status_code == 403:
-                    alt_r = scraper.requests.get(seg_url, headers=headers, impersonate="safari17_0", timeout=15)
-                    if alt_r.status_code == 200:
-                        yield alt_r.content
-            except Exception:
+            chunk_data = None
+            for attempt in range(3):
+                try:
+                    seg_r = dl_sess.get(seg_url, headers=headers, timeout=12)
+                    if seg_r.status_code == 200:
+                        chunk_data = seg_r.content
+                        cache_dict[seg_name] = len(chunk_data)
+                        break
+                    elif seg_r.status_code in [403, 429]:
+                        dl_sess = scraper.requests.Session(impersonate="safari17_0")
+                        time.sleep(0.2)
+                except Exception:
+                    time.sleep(0.3)
+                    continue
+
+            if not chunk_data:
                 continue
+
+            if idx == start_seg_idx and intra_offset > 0:
+                out = chunk_data[intra_offset:]
+            else:
+                out = chunk_data
+
+            if end_byte is not None:
+                remaining = (end_byte - start_byte + 1) - bytes_sent
+                if remaining <= 0:
+                    break
+                if len(out) > remaining:
+                    out = out[:remaining]
+                    yield out
+                    bytes_sent += len(out)
+                    break
+
+            yield out
+            bytes_sent += len(out)
 
     return StreamingResponse(
         iter_video(),
-        status_code=200,
+        status_code=status_code,
         media_type="video/mp4",
         headers=resp_headers,
     )

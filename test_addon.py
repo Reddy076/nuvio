@@ -149,7 +149,20 @@ def test_stream_and_proxy():
     with urllib.request.urlopen(head_req) as resp:
         assert resp.status == 200
         assert resp.headers.get("Content-Type") == "video/mp4"
-        print("  PASSED: Download endpoint returned 200 OK with video/mp4 MIME type for Nuvio Downloader!")
+        assert resp.headers.get("Accept-Ranges") == "bytes"
+        print("  PASSED: Download endpoint returned 200 OK with video/mp4 MIME type and Accept-Ranges: bytes!")
+
+    # Test HTTP Range request (resuming support for Nuvio)
+    range_offset = 1500000
+    print(f"Testing download Range resume request: Range: bytes={range_offset}-...")
+    range_req = urllib.request.Request(f"{BASE_URL}{dl_path}", headers={"Range": f"bytes={range_offset}-"})
+    with urllib.request.urlopen(range_req) as resp:
+        assert resp.status == 206
+        cr = resp.headers.get("Content-Range")
+        assert cr is not None and cr.startswith(f"bytes {range_offset}-")
+        chunk = resp.read(64 * 1024)
+        assert len(chunk) > 0
+        print(f"  PASSED: Range request returned 206 Partial Content with Content-Range: {cr} and delivered {len(chunk)} bytes!")
 
 
 
