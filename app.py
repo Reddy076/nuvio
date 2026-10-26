@@ -254,22 +254,15 @@ def get_manifest():
     return JSONResponse(MANIFEST)
 
 
+@app.get("/health")
 @app.get("/debug")
-def debug_endpoint():
-    """Diagnostic endpoint to inspect live scraper connectivity."""
-    candidates = ["https://missav.media", "https://missav.fans"]
-    res = {}
-    for c in candidates:
-        try:
-            r = scraper.requests.get(
-                f"{c}/en/uncensored-leak",
-                impersonate="chrome124",
-                timeout=5,
-            )
-            res[c] = {"status": r.status_code, "len": len(r.text), "title": r.text[:500]}
-        except Exception as e:
-            res[c] = {"error": str(e)}
-    return JSONResponse(res)
+def health_endpoint():
+    """Health check endpoint confirming scraper connectivity."""
+    cat = scraper.fetch_catalog("missav_uncensored", page=1)
+    return JSONResponse({
+        "status": "healthy",
+        "catalog_items": len(cat),
+    })
 
 
 

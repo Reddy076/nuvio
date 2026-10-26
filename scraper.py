@@ -18,10 +18,12 @@ logger = logging.getLogger("missav_scraper")
 logging.basicConfig(level=logging.INFO)
 
 MIRRORS = [
-    "https://missav.ai",
+    "https://missav.media",
+    "https://missav.fans",
     "https://missav.ws",
-    "https://missav123.com",
     "https://missav.live",
+    "https://missav123.com",
+    "https://missav.ai",
 ]
 
 HEADERS = {
@@ -157,11 +159,11 @@ def parse_video_cards(page_html: str) -> List[Dict]:
     items = []
     seen = set()
 
-    # Pattern targeting lozad thumbnail image cards with fourhoi CDN
-    img_pattern = r'data-src="(https://fourhoi\.com/([a-zA-Z0-9_-]+)/cover-[tn]\.jpg)"[\s\S]*?alt="([^"]*)"'
+    # Pattern targeting lozad thumbnail image cards with any CDN (fourhoi.com, fourhoi.mrstcdn.store, etc.)
+    img_pattern = r'data-src="([^"]*?/([a-zA-Z0-9_-]+)/cover-[tn]\.jpg)"[\s\S]*?alt="([^"]*)"'
     matches = re.findall(img_pattern, page_html)
 
-    for img_url, slug, alt in matches:
+    for full_img_url, slug, alt in matches:
         if slug in seen:
             continue
         seen.add(slug)
@@ -263,8 +265,13 @@ def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
     for url in urls:
         for attempt in range(retries_per_url):
             try:
-                r = requests.get(url, headers=HEADERS, impersonate="chrome124", timeout=4)
-                if r.status_code == 200 and len(r.text) > 1000:
+                parsed = urllib.parse.urlparse(url)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                req_headers = dict(HEADERS)
+                req_headers["Referer"] = f"{origin}/"
+                req_headers["Origin"] = origin
+                r = requests.get(url, headers=req_headers, impersonate="chrome124", timeout=4)
+                if r.status_code == 200 and len(r.text) > 1000 and "Just a moment..." not in r.text:
                     return r.text
             except Exception as e:
                 logger.debug(f"Attempt failed for {url}: {e}")
