@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.cache
+*.log
+access.log
+attachments
+.git
+.gitignore
