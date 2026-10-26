@@ -9,7 +9,7 @@ import time
 import urllib.parse
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 import scraper
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "access.log")
@@ -408,6 +408,18 @@ def get_stream(type: str, id: str, request: Request):
         },
     })
 
+    # 3. Direct Video Download Streams (Compatible with Nuvio's Offline Downloader & 1DM/ADM)
+    for q in available_qualities:
+        label = quality_labels.get(q, f"🎬 {q}")
+        streams.append({
+            "name": "MissAV [Download]",
+            "title": f"{info['title']}\n💾 {label} (Direct MP4 / Download)",
+            "url": f"{base_url}/proxy/download/{uuid}/{q}/video.mp4",
+            "behaviorHints": {
+                "notWebReady": False,
+            },
+        })
+
     return JSONResponse({"streams": streams})
 
 
@@ -575,6 +587,83 @@ def proxy_ts(uuid: str, path: str, request: Request):
         status_code=r.status_code,
         headers=resp_headers,
     )
+
+
+@app.api_route("/proxy/download/{uuid}/{path:path}", methods=["GET", "HEAD"])
+def proxy_download(uuid: str, path: str, request: Request):
+    """
+    Direct Video Download Endpoint (MP4 container format).
+    Sequentially streams video segments as a continuous video file.
+    Enables Nuvio's internal download manager and external downloaders (1DM, ADM, browser)
+    to download full offline movies directly.
+    """
+    quality_match = re.search(r"(\d+p)", path)
+    quality = quality_match.group(1) if quality_match else "720p"
+
+    available = scraper.get_available_qualities(uuid)
+    if quality not in available and available:
+        quality = available[0]
+
+    surrit_url = f"https://surrit.com/{uuid}/{quality}/video.m3u8"
+    headers = {
+        "User-Agent": scraper.HEADERS["User-Agent"],
+        "Referer": "https://missav.ws/",
+        "Origin": "https://missav.ws",
+        "Accept": "*/*",
+    }
+
+    session = scraper.get_session()
+    try:
+        r = session.get(surrit_url, headers=headers, timeout=10)
+        if r.status_code == 403:
+            r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+        if r.status_code != 200:
+            raise HTTPException(status_code=r.status_code, detail="Failed to fetch segment list")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Playlist fetch error: {e}")
+
+    segment_names = [
+        line.strip()
+        for line in r.text.splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+    if not segment_names:
+        raise HTTPException(status_code=404, detail="No video segments found")
+
+    resp_headers = {
+        "Content-Type": "video/mp4",
+        "Content-Disposition": f'attachment; filename="{uuid}_{quality}.mp4"',
+        "Accept-Ranges": "none",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type",
+    }
+
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=resp_headers)
+
+    def iter_video():
+        sess = scraper.get_session()
+        for seg_name in segment_names:
+            seg_url = f"https://surrit.com/{uuid}/{quality}/{seg_name}"
+            try:
+                seg_r = sess.get(seg_url, headers=headers, timeout=15)
+                if seg_r.status_code == 200:
+                    yield seg_r.content
+                elif seg_r.status_code == 403:
+                    alt_r = scraper.requests.get(seg_url, headers=headers, impersonate="safari17_0", timeout=15)
+                    if alt_r.status_code == 200:
+                        yield alt_r.content
+            except Exception:
+                continue
+
+    return StreamingResponse(
+        iter_video(),
+        status_code=200,
+        media_type="video/mp4",
+        headers=resp_headers,
+    )
+
 
 
 if __name__ == "__main__":

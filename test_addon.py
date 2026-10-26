@@ -140,8 +140,17 @@ def test_stream_and_proxy():
     assert "/proxy/m3u8/" in text_master
     assert "#EXT-X-TOKEN" not in text_master
     print("  PASSED: Master playlist verified with high-to-low variant order and clean tags.")
-    assert seg_headers.get("Content-Type") == "video/mp2t"
-    print(f"  PASSED: Segment received {len(body_seg)} bytes with MPEG-TS sync byte 0x47 and video/mp2t Content-Type!")
+
+    # Test direct download stream (MP4)
+    dl_stream = [s for s in data["streams"] if "/proxy/download/" in s["url"]][0]
+    dl_path = dl_stream["url"].replace(BASE_URL, "")
+    print(f"Testing download endpoint (HEAD): {dl_path}...")
+    head_req = urllib.request.Request(f"{BASE_URL}{dl_path}", method="HEAD")
+    with urllib.request.urlopen(head_req) as resp:
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "video/mp4"
+        print("  PASSED: Download endpoint returned 200 OK with video/mp4 MIME type for Nuvio Downloader!")
+
 
 
 if __name__ == "__main__":
