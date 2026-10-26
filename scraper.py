@@ -42,27 +42,29 @@ HEADERS = {
     "Origin": "https://missav.ai",
 }
 
-# Persistent shared Session for HTTP/2 & TLS connection reuse across requests
-_session: Optional[requests.Session] = None
+# Persistent thread-local Session for HTTP/2 & TLS connection reuse across requests
+import threading
+_local_storage = threading.local()
 
 
 def get_session() -> requests.Session:
-    """Returns a shared curl_cffi session with Chrome TLS impersonation."""
-    global _session
-    if _session is None:
-        _session = requests.Session(impersonate="chrome120")
-    return _session
+    """Returns a thread-local curl_cffi session with Chrome TLS impersonation."""
+    sess = getattr(_local_storage, "session", None)
+    if sess is None:
+        sess = requests.Session(impersonate="chrome120")
+        _local_storage.session = sess
+    return sess
 
 
 def reset_session():
-    """Resets the shared session if a connection stall or curl error occurs."""
-    global _session
-    try:
-        if _session is not None:
-            _session.close()
-    except Exception:
-        pass
-    _session = None
+    """Resets the thread-local session if a connection stall or curl error occurs."""
+    sess = getattr(_local_storage, "session", None)
+    if sess is not None:
+        try:
+            sess.close()
+        except Exception:
+            pass
+        _local_storage.session = None
 
 
 # Persistent Disk & In-Memory Cache with TTL
@@ -566,8 +568,8 @@ def get_available_qualities(uuid: str) -> List[str]:
 def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = None, is_head: bool = False):
     """
     Fetches an MPEG-TS segment from origin CDN with automatic quality and domain fallback.
-    Maps .ts back to .jpeg for origin. If a 1080p chunk returns 404, automatically falls back
-    to 720p chunk so video playback never stops or errors.
+    Maps .ts back to .jpeg for origin. If a requested chunk returns 404, automatically falls back
+    to lower resolution chunks (1080p -> 720p -> 480p -> 360p) so video playback never stops or errors.
     """
     surrit_path = path[:-3] + ".jpeg" if path.endswith(".ts") else path
 
@@ -581,8 +583,11 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
         headers["Range"] = range_header
 
     paths_to_try = [surrit_path]
-    if surrit_path.startswith("1080p/"):
-        paths_to_try.append(surrit_path.replace("1080p/", "720p/", 1))
+    for q_from, q_to in [("1080p/", "720p/"), ("720p/", "480p/"), ("480p/", "360p/")]:
+        if surrit_path.startswith(q_from):
+            alt = surrit_path.replace(q_from, q_to, 1)
+            if alt not in paths_to_try:
+                paths_to_try.append(alt)
 
     sess = get_session()
     for current_path in paths_to_try:
@@ -593,16 +598,19 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
                     if is_head:
                         r = sess.head(surrit_url, headers=headers, timeout=6)
                     else:
-                        r = sess.get(surrit_url, headers=headers, timeout=10)
+                        r = sess.get(surrit_url, headers=headers, timeout=8)
 
                     if r.status_code in [200, 206]:
                         return r
+                    elif r.status_code == 404:
+                        # File does not exist on this domain/path; do not retry 404
+                        break
                     elif r.status_code == 403:
                         reset_session()
                         sess = get_session()
-                        time.sleep(0.15)
+                        time.sleep(0.1)
                 except Exception:
-                    time.sleep(0.15)
+                    time.sleep(0.1)
 
     return None
 

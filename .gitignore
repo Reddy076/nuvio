@@ -8,14 +8,10 @@ attachments/
 .env
 .venv
 
-# Android Project & Build Files (Ignored for Render Python deployment)
-app/
-build/
+# Android Build Artifacts & Caches
 .gradle/
-*.gradle
-gradle.properties
-gradlew
-gradlew.bat
+build/
+app/build/
 local.properties
 .idea/
 *.iml

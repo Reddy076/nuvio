@@ -503,21 +503,28 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
 
             # Automatic fallback if requested resolution (e.g. 1080p) does not exist on origin
             if r.status_code == 404 and re.match(r'^\d+p/', path):
+                current_q = path.split("/")[0]
                 qualities = scraper.get_available_qualities(uuid)
-                fallback_q = qualities[0] if qualities else "720p"
-                fallback_path = re.sub(r'^\d+p', fallback_q, path)
-                if fallback_path != path:
+                alt_qualities = [q for q in qualities if q != current_q]
+                if not alt_qualities:
+                    alt_qualities = [q for q in ["720p", "480p", "360p"] if q != current_q]
+
+                for fallback_q in alt_qualities:
+                    fallback_path = re.sub(r'^\d+p', fallback_q, path)
                     for domain in ["surrit.com", "surrit.mrstcdn.store"]:
                         surrit_url = f"https://{domain}/{uuid}/{fallback_path}"
                         try:
-                            r = session.get(surrit_url, headers=headers, timeout=10)
-                            if r.status_code == 403:
-                                r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
-                            if r.status_code == 200:
+                            alt_r = session.get(surrit_url, headers=headers, timeout=8)
+                            if alt_r.status_code == 403:
+                                alt_r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=8)
+                            if alt_r.status_code == 200:
+                                r = alt_r
                                 actual_path = fallback_path
                                 break
                         except Exception:
                             pass
+                    if r.status_code == 200:
+                        break
 
             if r.status_code != 200:
                 raise HTTPException(status_code=r.status_code, detail="Failed to fetch playlist from origin")
