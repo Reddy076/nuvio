@@ -598,46 +598,45 @@ def search_videos(
     return []
 
 
-def get_video_stream_info(slug: str) -> Optional[Dict]:
-    """
-    Fetches video page, unpacks stream script, and extracts UUID + playlist URLs.
-    Called when resolving streams for playback.
-    """
-    clean_slug = slug.replace("missav:", "").strip()
-    clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
-
-    cache_key = f"video:{clean_slug}"
-    cached = _get_cache(cache_key)
-    if cached:
-        return cached
-
+def _fetch_single_video_stream_info(clean_slug: str) -> Optional[Dict]:
+    """Fetches video page, unpacks stream script, and extracts UUID + direct sources for a single slug."""
     urls = [
         f"{m}/en/{clean_slug}" for m in MIRRORS
     ]
 
     page_html = fetch_with_fallback(urls)
     if not page_html:
-        logger.error(f"Could not load page for slug {clean_slug}")
         return None
 
     # Extract title
     title_match = re.search(r'<h1[^>]*class="[^"]*text-base[^"]*"[^>]*>(.*?)</h1>', page_html, re.DOTALL)
     title = html.unescape(title_match.group(1)).strip() if title_match else format_slug_title(clean_slug)
 
-    # Extract UUID
     uuid = None
+    source = None
+    source1280 = None
+    source842 = None
 
-    # 1. Unpacked JS check (match stream URL first, ignoring preview UUIDs)
+    # 1. Unpacked JS check
     unpacked_blocks = extract_packer_blocks(page_html)
     for block in unpacked_blocks:
+        # Match source variables
+        m_s = re.search(r"source\s*=\s*\\?['\"]([^'\"]+?)\\?['\"]", block)
+        if m_s and not source:
+            source = m_s.group(1)
+        m_1280 = re.search(r"source1280\s*=\s*\\?['\"]([^'\"]+?)\\?['\"]", block)
+        if m_1280 and not source1280:
+            source1280 = m_1280.group(1)
+        m_842 = re.search(r"source842\s*=\s*\\?['\"]([^'\"]+?)\\?['\"]", block)
+        if m_842 and not source842:
+            source842 = m_842.group(1)
+
         match = re.search(r'https?://[^/]+/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/(?:playlist|\d+p)', block)
-        if match:
+        if match and not uuid:
             uuid = match.group(1)
-            break
         match_surrit = re.search(r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/(?:playlist|\d+p)', block)
-        if match_surrit:
+        if match_surrit and not uuid:
             uuid = match_surrit.group(1)
-            break
 
     # 2. Raw HTML check for video stream URL (not preview)
     if not uuid:
@@ -654,32 +653,115 @@ def get_video_stream_info(slug: str) -> Optional[Dict]:
                 break
 
     if not uuid:
-        logger.error(f"Failed to find UUID for slug {clean_slug}")
         return None
 
     poster = f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
 
-    info = {
+    return {
         "slug": clean_slug,
         "title": title,
         "uuid": uuid,
         "poster": poster,
+        "source": source,
+        "source1280": source1280,
+        "source842": source842,
         "master_url": f"https://surrit.com/{uuid}/playlist.m3u8",
         "url_1080p": f"https://surrit.com/{uuid}/1080p/video.m3u8",
         "url_720p": f"https://surrit.com/{uuid}/720p/video.m3u8",
         "url_480p": f"https://surrit.com/{uuid}/480p/video.m3u8",
     }
 
-    # Also record in _meta_store
+
+def get_video_stream_info(slug: str) -> Optional[Dict]:
+    """
+    Fetches video page, unpacks stream script, and extracts UUID + playlist URLs.
+    Automatically checks alternate candidate slugs (e.g. clean code vs uncensored-leak)
+    to ensure 1080p FHD streams are always discovered and available!
+    """
+    clean_slug = urllib.parse.unquote(slug).strip().lower()
+    clean_slug = clean_slug.replace("missav:", "").strip()
+    clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
+    clean_slug = re.sub(r'\s+', '-', clean_slug)
+
+    cache_key = f"video_v3:{clean_slug}"
+    cached = _get_cache(cache_key)
+    if cached:
+        return cached
+
+    # Determine base code and candidates to check
+    base_code = re.sub(r'-(uncensored-leak|chinese-subtitle|uncensored|leak|c)$', '', clean_slug)
+    candidates = [clean_slug]
+    if base_code != clean_slug:
+        candidates.append(base_code)
+        candidates.append(f"{base_code}-chinese-subtitle")
+    else:
+        candidates.append(f"{clean_slug}-uncensored-leak")
+        candidates.append(f"{clean_slug}-chinese-subtitle")
+
+    primary_info = None
+    for cand in candidates:
+        info = _fetch_single_video_stream_info(cand)
+        if info:
+            primary_info = info
+            break
+
+    if not primary_info:
+        logger.error(f"Could not load page for slug {clean_slug}")
+        return None
+
+    # Check available variants for primary info
+    primary_vars = get_available_variants(primary_info["uuid"])
+    has_1080 = any(v["quality"] == "1080p" for v in primary_vars)
+
+    uuid_1080 = primary_info["uuid"] if has_1080 else None
+    path_1080 = next((v["path"] for v in primary_vars if v["quality"] == "1080p"), "1080p/video.m3u8") if has_1080 else None
+    uncensored_uuid = primary_info["uuid"] if "uncensored" in primary_info["slug"] else None
+    alt_slug = None
+
+    # If primary has no 1080p, search candidate alternates for 1080p
+    if not has_1080:
+        for cand in candidates:
+            if cand == primary_info["slug"]:
+                continue
+            alt_info = _fetch_single_video_stream_info(cand)
+            if alt_info and alt_info.get("uuid"):
+                alt_vars = get_available_variants(alt_info["uuid"])
+                alt_1080 = next((v for v in alt_vars if v["quality"] == "1080p"), None)
+                if alt_1080:
+                    uuid_1080 = alt_info["uuid"]
+                    path_1080 = alt_1080["path"]
+                    alt_slug = cand
+                    if "uncensored" in cand and not uncensored_uuid:
+                        uncensored_uuid = alt_info["uuid"]
+                    break
+
+    # Also check if an uncensored leak exists if primary was not uncensored
+    if not uncensored_uuid:
+        leak_cand = f"{base_code}-uncensored-leak"
+        if leak_cand != primary_info["slug"] and leak_cand != alt_slug:
+            leak_info = _fetch_single_video_stream_info(leak_cand)
+            if leak_info and leak_info.get("uuid"):
+                uncensored_uuid = leak_info["uuid"]
+
+    # Master UUID for adaptive playlist: prioritize the UUID that has 1080p so HLS reaches 1080p
+    master_uuid = uuid_1080 if uuid_1080 else primary_info["uuid"]
+
+    primary_info["uuid_1080"] = uuid_1080
+    primary_info["path_1080"] = path_1080
+    primary_info["master_uuid"] = master_uuid
+    primary_info["uncensored_uuid"] = uncensored_uuid
+    primary_info["alt_slug"] = alt_slug
+
+    # Record in _meta_store
     _meta_store[clean_slug] = {
         "slug": clean_slug,
-        "title": title,
-        "poster": poster,
-        "thumbnail": poster,
+        "title": primary_info["title"],
+        "poster": primary_info["poster"],
+        "thumbnail": primary_info["poster"],
     }
 
-    _set_cache(cache_key, info)
-    return info
+    _set_cache(cache_key, primary_info)
+    return primary_info
 
 
 def get_available_variants(uuid: str) -> List[Dict[str, any]]:
@@ -782,6 +864,17 @@ def get_available_variants(uuid: str) -> List[Dict[str, any]]:
                         })
                         seen_qualities.add("1080p")
                         break
+                    elif r.status_code in [403, 405]:
+                        r_get = sess.get(f"https://{domain}/{uuid}/{candidate_1080}", headers={**headers, "Range": "bytes=0-100"}, timeout=4)
+                        if r_get.status_code in [200, 206] and ("#EXTM3U" in r_get.text or len(r_get.content) > 10):
+                            variants.append({
+                                "quality": "1080p",
+                                "path": candidate_1080,
+                                "height": 1080,
+                                "bandwidth": 8000000
+                            })
+                            seen_qualities.add("1080p")
+                            break
                 except Exception:
                     pass
             if "1080p" in seen_qualities:

@@ -739,7 +739,8 @@ object MissAvRepository {
                         if (sUrl.isNotBlank()) {
                             val bh = sObj.optJSONObject("behaviorHints")
                             val sizeBytes = bh?.optLong("videoSize")?.takeIf { it > 0 }
-                            val res = parseResolution(name, title)
+                            val explicitRes = sObj.optString("resolution", "")
+                            val res = if (explicitRes.isNotBlank()) explicitRes else parseResolution(name, title)
                             val sizeStr = sizeBytes?.let { formatBytes(it) } ?: parseSizeText(title)
                             val isDirect = sUrl.endsWith(".mp4") || sUrl.contains("/download/") || sUrl.contains("/1080p/")
 
@@ -829,7 +830,8 @@ object MissAvRepository {
                             if (sUrl.isNotBlank()) {
                                 val sName = sObj.optString("name", source.name)
                                 val sTitle = sObj.optString("title", "")
-                                val res = parseResolution(sName, sTitle)
+                                val explicitRes = sObj.optString("resolution", "")
+                                val res = if (explicitRes.isNotBlank()) explicitRes else parseResolution(sName, sTitle)
                                 val sizeStr = parseSizeText(sTitle)
                                 cStreams.add(
                                     StreamItem(
@@ -865,14 +867,26 @@ object MissAvRepository {
     }
 
     private fun parseResolution(name: String, title: String): String {
+        val nameParts = name.split("\n")
+        if (nameParts.size > 1) {
+            val part = nameParts[1].lowercase()
+            when {
+                part.contains("2160") || part.contains("4k") -> return "4K"
+                part.contains("1080") || part.contains("fhd") -> return "1080p"
+                part.contains("720") || part.contains("hd") -> return "720p"
+                part.contains("480") || part.contains("sd") -> return "480p"
+                part.contains("360") -> return "360p"
+                part.contains("auto") -> return "Auto"
+            }
+        }
         val combined = "$name $title".lowercase()
         return when {
-            combined.contains("auto") -> "Auto"
             combined.contains("2160p") || combined.contains("4k") -> "4K"
-            combined.contains("1080p") || combined.contains("fhd") -> "1080p"
-            combined.contains("720p") || combined.contains("hd") -> "720p"
-            combined.contains("480p") || combined.contains("sd") -> "480p"
-            combined.contains("360p") -> "360p"
+            combined.contains("1080p") || combined.contains("1080") || combined.contains("fhd") -> "1080p"
+            combined.contains("720p") || combined.contains("720") || combined.contains("hd") -> "720p"
+            combined.contains("480p") || combined.contains("480") || combined.contains("sd") -> "480p"
+            combined.contains("360p") || combined.contains("360") -> "360p"
+            combined.contains("auto") -> "Auto"
             else -> "Auto"
         }
     }

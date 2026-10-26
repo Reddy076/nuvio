@@ -258,8 +258,12 @@ fun DetailScreen(
                     showStreamSheet = false
                     fun extractQualityLabel(s: StreamItem): String {
                         val lines = s.title?.lines()?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
-                        if (lines.size > 1) {
-                            return lines[1]
+                        val qLine = lines.firstOrNull {
+                            it.contains("1080") || it.contains("720") || it.contains("480") || it.contains("360") ||
+                            it.contains("Auto") || it.contains("FHD") || it.contains("HD") || it.contains("SD") || it.contains("Download")
+                        }
+                        if (qLine != null) {
+                            return qLine
                         }
                         val res = s.resolution ?: "Auto"
                         return when {
@@ -1361,8 +1365,12 @@ private fun RealStreamCard(
 
     // Split stream title lines if present from addon
     val rawLines = stream.title?.split("\n")?.filter { it.isNotBlank() } ?: emptyList()
-    val titleLine = if (rawLines.isNotEmpty()) rawLines[0] else "🍿 $mediaTitle"
-    val codecLine = if (rawLines.size > 1) rawLines[1] else "🎞️ $resolutionTag • ${stream.format ?: "HLS"} • ${stream.codec ?: "x264"}"
+    val qualityLine = rawLines.firstOrNull {
+        it.contains("1080") || it.contains("720") || it.contains("480") || it.contains("360") ||
+        it.contains("Auto") || it.contains("FHD") || it.contains("HD") || it.contains("SD") || it.contains("Download")
+    }
+    val titleLine = rawLines.firstOrNull { it != qualityLine } ?: "🍿 $mediaTitle"
+    val codecLine = qualityLine ?: "🎞️ $resolutionTag • ${stream.format ?: "HLS"} • ${stream.codec ?: "x264"}"
     val sourceLine = "🛰️ Source: ${stream.source ?: stream.addonName}"
     val sizeLine = if (!stream.sizeText.isNullOrBlank()) "💾 ${stream.sizeText}" else "💾 Direct CDN Stream"
     val audioLine = if (!stream.audio.isNullOrBlank()) "🎧 Audio: ${stream.audio}" else null

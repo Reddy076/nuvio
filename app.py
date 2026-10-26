@@ -60,7 +60,7 @@ SORT_OPTIONS = [
 
 MANIFEST = {
     "id": "community.missav",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "name": "MissAV",
     "description": "Watch MissAV releases, uncensored videos, and search directly in Nuvio",
     "logo": "https://missav.ws/img/flags/united-kingdom.png",
@@ -386,11 +386,13 @@ def get_stream(type: str, id: str, request: Request):
     if not info or not info.get("uuid"):
         return JSONResponse({"streams": []})
 
-    uuid = info["uuid"]
-    base_url = get_base_url(request)
+    primary_uuid = info["uuid"]
+    uuid_1080 = info.get("uuid_1080")
+    path_1080 = info.get("path_1080", "1080p/video.m3u8")
+    master_uuid = info.get("master_uuid") or (uuid_1080 if uuid_1080 else primary_uuid)
+    uncensored_uuid = info.get("uncensored_uuid")
 
-    # Dynamically verify which qualities actually exist on CDN for this video
-    available_qualities = scraper.get_available_qualities(uuid)
+    base_url = get_base_url(request)
 
     quality_labels = {
         "1080p": "🌟 1080p FHD",
@@ -399,49 +401,95 @@ def get_stream(type: str, id: str, request: Request):
         "360p": "📶 360p Low",
     }
 
-    variants = scraper.get_available_variants(uuid)
+    primary_variants = scraper.get_available_variants(primary_uuid)
+    has_1080_in_primary = any(v["quality"] == "1080p" for v in primary_variants)
+
+    clean_code = scraper.format_slug_title(clean_slug)
+    movie_title = info.get("title") or clean_code
 
     streams = []
 
-    # 1. Direct Video Download & Streaming (Direct MP4 container format)
-    # Compatible with Nuvio's 1-Click Download, Offline Downloader, and external downloaders (1DM, ADM).
-    # Placed first so Nuvio's downloader immediately identifies an MP4 direct stream instead of rejecting HLS.
-    for v in variants:
+    # 1. Adaptive HLS as the PRIMARY default stream (Auto Quality).
+    # Plays seamlessly across all videos, adapts automatically to network conditions,
+    # and handles up to 1080p Full HD!
+    # Format: name="MissAV\nAuto" so Nuvio/Stremio shows addon name + "Auto" badge!
+    streams.append({
+        "name": "MissAV\nAuto",
+        "title": f"⚡ Auto Quality (Adaptive HLS - up to 1080p FHD)\n{clean_code} • {movie_title}",
+        "url": f"{base_url}/proxy/m3u8/{master_uuid}/playlist.m3u8",
+        "behaviorHints": {
+            "notWebReady": False,
+        },
+        "resolution": "Auto",
+    })
+
+    # 2. 1080p FHD Direct Single-Resolution Stream
+    target_1080_uuid = primary_uuid if has_1080_in_primary else uuid_1080
+    if target_1080_uuid:
+        streams.append({
+            "name": "MissAV\n1080p",
+            "title": f"🌟 1080p FHD (HLS)\n{clean_code} • {movie_title}",
+            "url": f"{base_url}/proxy/m3u8/{target_1080_uuid}/{path_1080}",
+            "behaviorHints": {
+                "notWebReady": False,
+            },
+            "resolution": "1080p",
+        })
+
+    # 3. Uncensored Leak 720p (if distinct from 1080p stream)
+    if uncensored_uuid and uncensored_uuid != target_1080_uuid:
+        uncensored_vars = scraper.get_available_variants(uncensored_uuid)
+        uncensored_720 = next((v["path"] for v in uncensored_vars if v["quality"] == "720p"), "720p/video.m3u8")
+        streams.append({
+            "name": "MissAV\n720p",
+            "title": f"🔓 720p HD (Uncensored Leak)\n{clean_code} • {movie_title}",
+            "url": f"{base_url}/proxy/m3u8/{uncensored_uuid}/{uncensored_720}",
+            "behaviorHints": {
+                "notWebReady": False,
+            },
+            "resolution": "720p",
+        })
+
+    # 4. Direct single-resolution HLS streams using exact CDN subpaths (720p, 480p, 360p)
+    for v in primary_variants:
         q = v["quality"]
+        if q == "1080p":
+            continue  # Already added above as item #2
+        v_path = v["path"]
+        label = quality_labels.get(q, f"🎬 {q}")
+        streams.append({
+            "name": f"MissAV\n{q}",
+            "title": f"{label} (HLS)\n{clean_code} • {movie_title}",
+            "url": f"{base_url}/proxy/m3u8/{primary_uuid}/{v_path}",
+            "behaviorHints": {
+                "notWebReady": False,
+            },
+            "resolution": q,
+        })
+
+    # 5. Direct Video Download Streams (Direct MP4 container format)
+    # Compatible with Nuvio's 1-Click Download, Offline Downloader, and external downloaders (1DM, ADM).
+    # Placed after live HLS streams so player doesn't select MP4 download by default.
+    download_qualities = []
+    if target_1080_uuid:
+        download_qualities.append(("1080p", target_1080_uuid))
+    for v in primary_variants:
+        q = v["quality"]
+        if q != "1080p":
+            download_qualities.append((q, primary_uuid))
+
+    for q, d_uuid in download_qualities:
         label = quality_labels.get(q, f"🎬 {q}")
         filename = f"{clean_slug}_{q}.mp4"
         streams.append({
-            "name": f"MissAV {q} [Download]",
-            "title": f"{info['title']}\n💾 {label} (Direct MP4 / Download)",
-            "url": f"{base_url}/proxy/download/{uuid}/{q}/video.mp4",
+            "name": f"MissAV [Download]\n{q}",
+            "title": f"💾 {label} (Direct MP4 / Download)\n{clean_code} • {movie_title}",
+            "url": f"{base_url}/proxy/download/{d_uuid}/{q}/video.mp4",
             "behaviorHints": {
                 "notWebReady": False,
                 "filename": filename,
             },
-        })
-
-    # 2. Adaptive HLS as secondary stream for live adaptive playback
-    streams.append({
-        "name": "MissAV [Auto HLS]",
-        "title": f"{info['title']}\n⚡ Auto Quality (Adaptive HLS)",
-        "url": f"{base_url}/proxy/m3u8/{uuid}/playlist.m3u8",
-        "behaviorHints": {
-            "notWebReady": False,
-        },
-    })
-
-    # 3. Direct single-resolution HLS streams using exact CDN subpaths
-    for v in variants:
-        q = v["quality"]
-        v_path = v["path"]
-        label = quality_labels.get(q, f"🎬 {q}")
-        streams.append({
-            "name": "MissAV [HLS]",
-            "title": f"{info['title']}\n{label} (HLS)",
-            "url": f"{base_url}/proxy/m3u8/{uuid}/{v_path}",
-            "behaviorHints": {
-                "notWebReady": False,
-            },
+            "resolution": q,
         })
 
     return JSONResponse({"streams": streams})
@@ -553,6 +601,17 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
                     current_inf = None
                 else:
                     header_lines.append(trimmed)
+
+            # If 1080p is available for this UUID but missing from origin master playlist, inject it
+            has_1080_in_entries = any("1080" in entry[0] or "1080" in entry[1] for entry in stream_entries)
+            if not has_1080_in_entries:
+                uuid_vars = scraper.get_available_variants(uuid)
+                v1080 = next((v for v in uuid_vars if v["quality"] == "1080p"), None)
+                if v1080:
+                    stream_entries.append((
+                        '#EXT-X-STREAM-INF:BANDWIDTH=8000000,AVERAGE-BANDWIDTH=4500000,CODECS="avc1.640028,mp4a.40.2",RESOLUTION=1920x1080,CLOSED-CAPTIONS=NONE',
+                        v1080["path"]
+                    ))
 
             # Extract bandwidth and sort descending
             def get_bw(inf_line):
