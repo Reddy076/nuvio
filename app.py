@@ -60,7 +60,7 @@ SORT_OPTIONS = [
 
 MANIFEST = {
     "id": "community.missav",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "name": "MissAV",
     "description": "Watch MissAV releases, uncensored videos, and search directly in Nuvio",
     "logo": "https://missav.ws/img/flags/united-kingdom.png",

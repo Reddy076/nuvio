@@ -2,7 +2,7 @@
   "manifest": {
     "id": "community.missav",
     "name": "MissAV",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "Watch MissAV releases, uncensored videos, and search directly in Nuvio",
     "catalogs": [
       {
