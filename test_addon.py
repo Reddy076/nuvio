@@ -68,6 +68,22 @@ def test_search():
     assert len(data_act["metas"]) > 0
     print(f"  PASSED: Actress search returned {len(data_act['metas'])} items.")
 
+    print("Testing search with sort /catalog/movie/missav_uncensored/search=ipx&sort=today_views.json...")
+    status_sort, _, body_sort = fetch("/catalog/movie/missav_uncensored/search=ipx&sort=today_views.json")
+    assert status_sort == 200
+    data_sort = json.loads(body_sort.decode())
+    assert "metas" in data_sort
+    assert len(data_sort["metas"]) > 0
+    print(f"  PASSED: Sort search today_views returned {len(data_sort['metas'])} items.")
+
+    print("Testing direct /search?q=ipx&sort=monthly_views endpoint...")
+    status_direct, _, body_direct = fetch("/search?q=ipx&sort=monthly_views")
+    assert status_direct == 200
+    data_direct = json.loads(body_direct.decode())
+    assert "metas" in data_direct
+    assert len(data_direct["metas"]) > 0
+    print(f"  PASSED: Direct search endpoint returned {len(data_direct['metas'])} sorted items.")
+
 
 def test_meta():
     print("Testing instant /meta/movie/missav:nhdtb-213-uncensored-leak.json...")

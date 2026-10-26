@@ -48,6 +48,16 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
+SORT_OPTIONS = [
+    "views",
+    "monthly_views",
+    "weekly_views",
+    "today_views",
+    "saved",
+    "published_at",
+    "released_at",
+]
+
 MANIFEST = {
     "id": "community.missav",
     "version": "1.3.0",
@@ -82,9 +92,10 @@ MANIFEST = {
             "name": "MissAV Uncensored Leak",
             "extra": [
                 {"name": "search", "isRequired": False},
+                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
                 {"name": "skip", "isRequired": False},
             ],
-            "extraSupported": ["search", "skip"],
+            "extraSupported": ["search", "sort", "skip"],
         },
         {
             "type": "movie",
@@ -92,9 +103,10 @@ MANIFEST = {
             "name": "MissAV Recent Releases",
             "extra": [
                 {"name": "search", "isRequired": False},
+                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
                 {"name": "skip", "isRequired": False},
             ],
-            "extraSupported": ["search", "skip"],
+            "extraSupported": ["search", "sort", "skip"],
         },
         {
             "type": "movie",
@@ -102,9 +114,10 @@ MANIFEST = {
             "name": "MissAV New",
             "extra": [
                 {"name": "search", "isRequired": False},
+                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
                 {"name": "skip", "isRequired": False},
             ],
-            "extraSupported": ["search", "skip"],
+            "extraSupported": ["search", "sort", "skip"],
         },
         {
             "type": "movie",
@@ -112,9 +125,10 @@ MANIFEST = {
             "name": "MissAV Chinese Subtitles",
             "extra": [
                 {"name": "search", "isRequired": False},
+                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
                 {"name": "skip", "isRequired": False},
             ],
-            "extraSupported": ["search", "skip"],
+            "extraSupported": ["search", "sort", "skip"],
         },
     ],
 }
@@ -316,14 +330,21 @@ def parse_extra_params(extra_str: str) -> dict:
     return params
 
 
+@app.get("/search")
+def direct_search(q: str = "", sort: str = "views", page: int = 1):
+    """Direct search endpoint with sorting support for Nuvio and external clients."""
+    items = scraper.search_videos(q, page=page, sort=sort)
+    return JSONResponse({"metas": items})
+
+
 @app.api_route("/catalog/{type}/{id:path}", methods=["GET", "HEAD"])
 def get_catalog(type: str, id: str, request: Request):
     """
     Returns catalogs or search results for Nuvio.
-    Supports ?search=query, /search=query.json, and skip=number.
+    Supports ?search=query, /search=query.json, sort=option, and skip=number.
     """
     raw_path = urllib.parse.unquote(id)
-    # id could be "missav_uncensored", "missav_uncensored/search=foo.json", "missav_uncensored.json", etc.
+    # id could be "missav_uncensored", "missav_uncensored/search=foo.json", "missav_uncensored/sort=monthly_views.json", etc.
     parts = raw_path.split("/")
     catalog_id = parts[0].replace(".json", "")
     extra_str = "/".join(parts[1:]) if len(parts) > 1 else ""
@@ -332,6 +353,7 @@ def get_catalog(type: str, id: str, request: Request):
     extra_params.update(dict(request.query_params))
 
     search_query = extra_params.get("search")
+    sort_val = extra_params.get("sort")
     skip_val = extra_params.get("skip", "0")
     try:
         skip = int(skip_val)
@@ -341,9 +363,9 @@ def get_catalog(type: str, id: str, request: Request):
     page = 1 + (skip // 12)
 
     if search_query:
-        items = scraper.search_videos(search_query, page=page)
+        items = scraper.search_videos(search_query, page=page, sort=sort_val or "views")
     else:
-        items = scraper.fetch_catalog(catalog_id, page=page)
+        items = scraper.fetch_catalog(catalog_id, page=page, sort=sort_val)
 
     if type == "series":
         series_items = []

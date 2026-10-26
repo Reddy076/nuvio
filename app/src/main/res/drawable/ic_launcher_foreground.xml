@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Glow / Background Circle -->
+    <path
+        android:fillColor="#241014"
+        android:pathData="M54,54m-38,0a38,38 0 1,0 76,0a38,38 0 1,0 -76,0" />
+    <!-- Stylized 'R' for Red App -->
+    <path
+        android:fillColor="#E50914"
+        android:pathData="M38,30h18c8.8,0 16,7.2 16,16 0,6.5 -3.9,12.1 -9.5,14.6L74,78H60.5L49,62H48v16H38V30zm10,8v16h8c4.4,0 8,-3.6 8,-8s-3.6,-8 -8,-8h-8z" />
+    <path
+        android:fillColor="#FF2E4D"
+        android:pathData="M48,38h8c4.4,0 8,3.6 8,8s-3.6,8 -8,8h-8V38z" />
+</vector>

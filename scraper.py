@@ -279,20 +279,48 @@ def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
     return ""
 
 
-def fetch_catalog(category: str, page: int = 1) -> List[Dict]:
+SORT_MAP = {
+    "views": "views",
+    "total_views": "views",
+    "popular": "views",
+    "monthly_views": "monthly_views",
+    "monthly": "monthly_views",
+    "month": "monthly_views",
+    "this_month": "monthly_views",
+    "weekly_views": "weekly_views",
+    "weekly": "weekly_views",
+    "week": "weekly_views",
+    "this_week": "weekly_views",
+    "today_views": "today_views",
+    "today": "today_views",
+    "saved": "saved",
+    "most_saved": "saved",
+    "favorites": "saved",
+    "published_at": "published_at",
+    "recent": "published_at",
+    "new": "published_at",
+    "released_at": "released_at",
+    "release": "released_at",
+}
+
+
+def fetch_catalog(category: str, page: int = 1, sort: Optional[str] = None) -> List[Dict]:
     """
     Fetches catalog list for a given category and page with automatic mirror fallback.
+    Supports sorting: views, monthly_views, weekly_views, today_views, saved, published_at, released_at.
     Returns persistent/stale cached items immediately (<5ms) to guarantee Nuvio never stalls on startup.
     """
-    cache_key = f"catalog:{category}:{page}"
+    norm_sort = SORT_MAP.get(sort.lower().replace("-", "_").replace(" ", "_"), sort) if sort else None
+    cache_key = f"catalog:{category}:{norm_sort or 'default'}:{page}"
     cached = _get_cache(cache_key)
     if cached:
         return cached
 
     # Fast path: return existing disk cache immediately so app starts in <1 second
-    stale = _get_cache(cache_key, allow_stale=True)
-    if stale:
-        return stale
+    if not norm_sort:
+        stale = _get_cache(cache_key, allow_stale=True)
+        if stale:
+            return stale
 
     cat_map = {
         "missav_uncensored": "uncensored-leak",
@@ -305,8 +333,13 @@ def fetch_catalog(category: str, page: int = 1) -> List[Dict]:
         "missav_chinese_series": "chinese-subtitle",
     }
 
-    subpath = cat_map.get(category, "uncensored-leak")
-    query_str = f"?page={page}" if page > 1 else ""
+    subpath = cat_map.get(category, category)
+    params = []
+    if norm_sort:
+        params.append(f"sort={norm_sort}")
+    if page > 1:
+        params.append(f"page={page}")
+    query_str = ("?" + "&".join(params)) if params else ""
 
     urls = [
         f"{m}/en/{subpath}{query_str}" for m in MIRRORS
@@ -318,24 +351,32 @@ def fetch_catalog(category: str, page: int = 1) -> List[Dict]:
         _set_cache(cache_key, items)
         return items
 
-    logger.error(f"Failed to fetch catalog {category} page {page}")
+    logger.error(f"Failed to fetch catalog {category} page {page} sort {sort}")
     return []
 
 
-def search_videos(query: str, page: int = 1) -> List[Dict]:
+def search_videos(query: str, page: int = 1, sort: str = "views") -> List[Dict]:
     """
     Searches MissAV for titles or actress names matching query with automatic mirror and actress fallback.
+    Supports sort filters: views, monthly_views, weekly_views, today_views, saved, published_at, released_at.
     """
     clean_query = urllib.parse.unquote(query.strip())
     if not clean_query:
         return []
 
-    cache_key = f"search:{clean_query.lower()}:{page}"
+    norm_sort = SORT_MAP.get(sort.lower().replace("-", "_").replace(" ", "_"), "views") if sort else "views"
+
+    cache_key = f"search:{clean_query.lower()}:{norm_sort}:{page}"
     cached = _get_cache(cache_key)
     if cached:
         return cached
 
-    query_str = f"?page={page}" if page > 1 else ""
+    params = []
+    if norm_sort:
+        params.append(f"sort={norm_sort}")
+    if page > 1:
+        params.append(f"page={page}")
+    query_str = ("?" + "&".join(params)) if params else ""
     encoded_query = urllib.parse.quote(clean_query)
 
     # 1. Primary search endpoint
@@ -374,7 +415,7 @@ def search_videos(query: str, page: int = 1) -> List[Dict]:
         _set_cache(cache_key, items)
         return items
 
-    logger.warning(f"No results found for search query: {query}")
+    logger.warning(f"No results found for search query: {query} (sort: {norm_sort})")
     return []
 
 

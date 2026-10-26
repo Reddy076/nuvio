@@ -7,3 +7,7 @@ access.log
 attachments/
 .env
 .venv
+.gradle/
+build/
+app/build/
+*.hprof
