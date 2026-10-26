@@ -106,11 +106,11 @@ fun PlayerScreen(
     // Quality formatting helper
     fun cleanQualityText(raw: String): String {
         return when {
+            raw.contains("Auto", ignoreCase = true) -> "⚡ Auto Quality"
             raw.contains("1080") -> "🌟 1080p FHD"
             raw.contains("720") -> "📺 720p HD"
             raw.contains("480") -> "📱 480p SD"
             raw.contains("360") -> "📶 360p Low"
-            raw.contains("Auto", ignoreCase = true) -> "⚡ Auto Quality"
             raw.contains("Direct", ignoreCase = true) || raw.contains("MP4", ignoreCase = true) -> "💾 Direct Stream"
             raw.length > 25 -> raw.lines().drop(1).firstOrNull() ?: "HD"
             else -> raw

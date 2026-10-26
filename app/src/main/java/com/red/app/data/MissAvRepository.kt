@@ -284,11 +284,17 @@ object MissAvRepository {
         val uuid = if (item.videoUuid.isNotBlank()) item.videoUuid else "27820a29-8d98-40a3-935f-67b86c2b239e"
         val headers = getStreamHeaders()
 
-        // 1:1 Match with the MissAV Addon stream structure developed earlier:
-        // Direct single-resolution variant streams first for instant ExoPlayer playback
+        // Auto Quality (Adaptive HLS) FIRST for reliable instant start and dynamic bitrate adaptation
         return listOf(
             StreamQualityOption(
-                label = "🌟 1080p FHD (Proxied / ExoPlayer Fast)",
+                label = "⚡ Auto Quality (Adaptive HLS)",
+                resolution = "Auto",
+                streamUrl = "$addonBaseUrl/proxy/m3u8/$uuid/playlist.m3u8",
+                headers = headers,
+                isDirect = false
+            ),
+            StreamQualityOption(
+                label = "🌟 1080p FHD (Proxied)",
                 resolution = "1080p",
                 streamUrl = "$addonBaseUrl/proxy/m3u8/$uuid/1080p/video.m3u8",
                 headers = headers,
@@ -309,11 +315,11 @@ object MissAvRepository {
                 isDirect = true
             ),
             StreamQualityOption(
-                label = "⚡ Auto Quality (Adaptive HLS)",
-                resolution = "Auto",
-                streamUrl = "$addonBaseUrl/proxy/m3u8/$uuid/playlist.m3u8",
+                label = "📶 360p Low (Proxied)",
+                resolution = "360p",
+                streamUrl = "$addonBaseUrl/proxy/m3u8/$uuid/360p/video.m3u8",
                 headers = headers,
-                isDirect = false
+                isDirect = true
             ),
             StreamQualityOption(
                 label = "💾 1080p MP4 (Direct Download)",
@@ -897,12 +903,13 @@ object MissAvRepository {
     private fun parseResolution(name: String, title: String): String {
         val combined = "$name $title".lowercase()
         return when {
+            combined.contains("auto") -> "Auto"
             combined.contains("2160p") || combined.contains("4k") -> "4K"
             combined.contains("1080p") || combined.contains("fhd") -> "1080p"
             combined.contains("720p") || combined.contains("hd") -> "720p"
             combined.contains("480p") || combined.contains("sd") -> "480p"
             combined.contains("360p") -> "360p"
-            else -> "HD"
+            else -> "Auto"
         }
     }
 

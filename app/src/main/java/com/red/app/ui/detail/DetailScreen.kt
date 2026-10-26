@@ -261,13 +261,13 @@ fun DetailScreen(
                         if (lines.size > 1) {
                             return lines[1]
                         }
-                        val res = s.resolution ?: "1080p"
+                        val res = s.resolution ?: "Auto"
                         return when {
+                            res.contains("auto", ignoreCase = true) || s.url?.contains("playlist.m3u8") == true -> "⚡ Auto Quality"
                             res.contains("1080") -> "🌟 1080p FHD"
                             res.contains("720") -> "📺 720p HD"
                             res.contains("480") -> "📱 480p SD"
                             res.contains("360") -> "📶 360p Low"
-                            s.url?.contains("playlist.m3u8") == true -> "⚡ Auto Quality"
                             s.isDirect -> "💾 Direct Stream"
                             else -> res
                         }

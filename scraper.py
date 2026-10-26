@@ -505,13 +505,18 @@ def get_video_stream_info(slug: str) -> Optional[Dict]:
     return info
 
 
-def get_available_qualities(uuid: str) -> List[str]:
+def get_available_variants(uuid: str) -> List[Dict[str, any]]:
     """
-    Checks origin CDNs for a given UUID and returns available quality names
-    sorted descending (e.g. ['1080p', '720p', '480p', '360p']).
-    Directly tests 1080p to ensure 1080p is never missed on slow connections.
+    Parses playlist.m3u8 on origin CDNs and returns all available stream variants,
+    supporting both standard shorthand ('1080p/video.m3u8') and explicit dimension
+    folders ('1280x720/video.m3u8', '842x480/video.m3u8', '640x360/video.m3u8').
+    Each variant dict contains:
+      - 'quality': '1080p', '720p', '480p', or '360p'
+      - 'path': actual subpath on Surrit, e.g. '1280x720/video.m3u8'
+      - 'height': integer height (e.g. 720)
+      - 'bandwidth': integer bandwidth
     """
-    cache_key = f"qualities:{uuid}"
+    cache_key = f"variants:{uuid}"
     cached = _get_cache(cache_key)
     if cached:
         return cached
@@ -524,52 +529,116 @@ def get_available_qualities(uuid: str) -> List[str]:
     }
 
     sess = get_session()
-    qualities_found = set()
-
-    # 1. Parse playlist.m3u8 on surrit.com and surrit.mrstcdn.store
+    playlist_text = ""
     for domain in ["surrit.com", "surrit.mrstcdn.store"]:
         url = f"https://{domain}/{uuid}/playlist.m3u8"
         try:
             r = sess.get(url, headers=headers, timeout=8)
-            if r.status_code == 200:
-                found = set(re.findall(r"(\d+p)/video\.m3u8", r.text))
-                if found:
-                    qualities_found.update(found)
-                    break
+            if r.status_code == 200 and "#EXTM3U" in r.text:
+                playlist_text = r.text
+                break
         except Exception as e:
             logger.debug(f"Failed to check playlist on {domain} for {uuid}: {e}")
 
-    # 2. Check if 1080p is directly accessible even if missing from master playlist
-    if "1080p" not in qualities_found:
+    variants = []
+    seen_qualities = set()
+
+    if playlist_text:
+        lines = playlist_text.splitlines()
+        current_inf = None
+        for line in lines:
+            trimmed = line.strip()
+            if not trimmed or trimmed.startswith("#EXT-X-TOKEN"):
+                continue
+            if trimmed.startswith("#EXT-X-STREAM-INF"):
+                current_inf = trimmed
+            elif current_inf and not trimmed.startswith("#"):
+                uri = trimmed
+                res_match = re.search(r'RESOLUTION=(\d+)x(\d+)', current_inf)
+                height = int(res_match.group(2)) if res_match else None
+                if not height:
+                    if "1080" in uri:
+                        height = 1080
+                    elif "720" in uri:
+                        height = 720
+                    elif "480" in uri:
+                        height = 480
+                    elif "360" in uri:
+                        height = 360
+
+                if height:
+                    if height >= 1000:
+                        label = "1080p"
+                    elif height >= 700:
+                        label = "720p"
+                    elif height >= 450:
+                        label = "480p"
+                    else:
+                        label = "360p"
+                else:
+                    label = "720p"
+
+                bw_match = re.search(r'BANDWIDTH=(\d+)', current_inf)
+                bw = int(bw_match.group(1)) if bw_match else 0
+
+                variants.append({
+                    "quality": label,
+                    "path": uri,
+                    "height": height or 0,
+                    "bandwidth": bw
+                })
+                seen_qualities.add(label)
+                current_inf = None
+
+    # Check if 1080p is directly accessible even if missing from master playlist
+    if "1080p" not in seen_qualities:
         for domain in ["surrit.com", "surrit.mrstcdn.store"]:
-            try:
-                r = sess.head(f"https://{domain}/{uuid}/1080p/video.m3u8", headers=headers, timeout=4)
-                if r.status_code == 200:
-                    qualities_found.add("1080p")
-                    break
-            except Exception:
-                pass
+            for candidate_1080 in ["1080p/video.m3u8", "1920x1080/video.m3u8"]:
+                try:
+                    r = sess.head(f"https://{domain}/{uuid}/{candidate_1080}", headers=headers, timeout=4)
+                    if r.status_code == 200:
+                        variants.append({
+                            "quality": "1080p",
+                            "path": candidate_1080,
+                            "height": 1080,
+                            "bandwidth": 8000000
+                        })
+                        seen_qualities.add("1080p")
+                        break
+                except Exception:
+                    pass
+            if "1080p" in seen_qualities:
+                break
 
-    def res_key(q):
-        try:
-            return int(q.rstrip("p"))
-        except ValueError:
-            return 0
+    if variants:
+        variants.sort(key=lambda x: (x["height"], x["bandwidth"]), reverse=True)
+        _set_cache(cache_key, variants)
+        return variants
 
-    if qualities_found:
-        sorted_qualities = sorted(list(qualities_found), key=res_key, reverse=True)
-        _set_cache(cache_key, sorted_qualities)
-        return sorted_qualities
+    # Default fallback if network was temporarily unreachable
+    return [
+        {"quality": "1080p", "path": "1080p/video.m3u8", "height": 1080, "bandwidth": 8000000},
+        {"quality": "720p", "path": "720p/video.m3u8", "height": 720, "bandwidth": 4000000},
+        {"quality": "480p", "path": "480p/video.m3u8", "height": 480, "bandwidth": 2000000},
+        {"quality": "360p", "path": "360p/video.m3u8", "height": 360, "bandwidth": 1000000},
+    ]
 
-    # If network temporarily failed, return standard qualities without caching permanently
-    return ["1080p", "720p", "480p", "360p"]
+
+def get_available_qualities(uuid: str) -> List[str]:
+    """
+    Checks origin CDNs for a given UUID and returns available quality names
+    sorted descending (e.g. ['1080p', '720p', '480p', '360p']).
+    """
+    variants = get_available_variants(uuid)
+    return [v["quality"] for v in variants]
 
 
 def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = None, is_head: bool = False):
     """
-    Fetches an MPEG-TS segment from origin CDN with automatic quality and domain fallback.
-    Maps .ts back to .jpeg for origin. If a requested chunk returns 404, automatically falls back
-    to lower resolution chunks (1080p -> 720p -> 480p -> 360p) so video playback never stops or errors.
+    Fetches an MPEG-TS segment from origin CDN with automatic dimension alias resolution
+    (e.g. 720p <-> 1280x720, 480p <-> 842x480/854x480, 360p <-> 640x360),
+    automatic quality fallback (1080p -> 720p -> 480p -> 360p), and multi-CDN support.
+    Maps .ts back to .jpeg for origin.
     """
     surrit_path = path[:-3] + ".jpeg" if path.endswith(".ts") else path
 
@@ -582,12 +651,41 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
     if range_header:
         headers["Range"] = range_header
 
+    # Dimension and shorthand folder aliases
+    aliases = {
+        "1080p/": ["1920x1080/"],
+        "1920x1080/": ["1080p/"],
+        "720p/": ["1280x720/"],
+        "1280x720/": ["720p/"],
+        "480p/": ["842x480/", "854x480/"],
+        "842x480/": ["480p/", "854x480/"],
+        "854x480/": ["480p/", "842x480/"],
+        "360p/": ["640x360/"],
+        "640x360/": ["360p/"],
+    }
     paths_to_try = [surrit_path]
-    for q_from, q_to in [("1080p/", "720p/"), ("720p/", "480p/"), ("480p/", "360p/")]:
-        if surrit_path.startswith(q_from):
-            alt = surrit_path.replace(q_from, q_to, 1)
-            if alt not in paths_to_try:
-                paths_to_try.append(alt)
+    for prefix, alt_prefixes in aliases.items():
+        if surrit_path.startswith(prefix):
+            for alt_p in alt_prefixes:
+                alt = surrit_path.replace(prefix, alt_p, 1)
+                if alt not in paths_to_try:
+                    paths_to_try.append(alt)
+            break
+
+    # Resolution downscale fallbacks (1080 -> 720 -> 480 -> 360)
+    downscale_chain = [
+        (["1080p/", "1920x1080/"], ["720p/", "1280x720/"]),
+        (["720p/", "1280x720/"], ["480p/", "842x480/", "854x480/"]),
+        (["480p/", "842x480/", "854x480/"], ["360p/", "640x360/"])
+    ]
+    for from_list, to_list in downscale_chain:
+        for p in list(paths_to_try):
+            for f in from_list:
+                if p.startswith(f):
+                    for t in to_list:
+                        new_p = p.replace(f, t, 1)
+                        if new_p not in paths_to_try:
+                            paths_to_try.append(new_p)
 
     sess = get_session()
     for current_path in paths_to_try:
@@ -603,7 +701,7 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
                     if r.status_code in [200, 206]:
                         return r
                     elif r.status_code == 404:
-                        # File does not exist on this domain/path; do not retry 404
+                        # File does not exist on this domain/path; try next path candidate
                         break
                     elif r.status_code == 403:
                         reset_session()

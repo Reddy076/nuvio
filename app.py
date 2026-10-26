@@ -420,22 +420,13 @@ def get_stream(type: str, id: str, request: Request):
         "360p": "📶 360p Low",
     }
 
+    variants = scraper.get_available_variants(uuid)
+
     streams = []
 
-    # 1. Direct single-resolution streams FIRST (highest to lowest).
-    # Direct variant streams start INSTANTLY in ExoPlayer without ABR track negotiation delays!
-    for q in available_qualities:
-        label = quality_labels.get(q, f"🎬 {q}")
-        streams.append({
-            "name": "MissAV [Proxied]",
-            "title": f"{info['title']}\n{label}",
-            "url": f"{base_url}/proxy/m3u8/{uuid}/{q}/video.m3u8",
-            "behaviorHints": {
-                "notWebReady": False,
-            },
-        })
-
-    # 2. Adaptive HLS as an alternative option
+    # 1. Adaptive HLS as the PRIMARY default stream (Auto Quality).
+    # Plays seamlessly across all videos, adapts automatically to network conditions,
+    # and handles all origin variant folder structures (e.g. 1280x720) without 404s!
     streams.append({
         "name": "MissAV [Proxied]",
         "title": f"{info['title']}\n⚡ Auto Quality (Adaptive HLS)",
@@ -445,13 +436,29 @@ def get_stream(type: str, id: str, request: Request):
         },
     })
 
+    # 2. Direct single-resolution streams using exact CDN subpaths (e.g. 1280x720/video.m3u8 or 720p/video.m3u8)
+    for v in variants:
+        q = v["quality"]
+        v_path = v["path"]
+        label = quality_labels.get(q, f"🎬 {q}")
+        streams.append({
+            "name": "MissAV [Proxied]",
+            "title": f"{info['title']}\n{label}",
+            "url": f"{base_url}/proxy/m3u8/{uuid}/{v_path}",
+            "behaviorHints": {
+                "notWebReady": False,
+            },
+        })
+
     # 3. Direct Video Download Streams (Compatible with Nuvio's Offline Downloader & 1DM/ADM)
-    for q in available_qualities:
+    for v in variants:
+        q = v["quality"]
+        v_path = v["path"]
         label = quality_labels.get(q, f"🎬 {q}")
         streams.append({
             "name": "MissAV [Download]",
             "title": f"{info['title']}\n💾 {label} (Direct MP4 / Download)",
-            "url": f"{base_url}/proxy/download/{uuid}/{q}/video.mp4",
+            "url": f"{base_url}/proxy/download/{uuid}/{v_path}",
             "behaviorHints": {
                 "notWebReady": False,
             },
@@ -466,7 +473,7 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
     HLS Master & Variant Playlist Proxy.
     Fetches playlist from surrit.com, rewrites segment URLs to .ts for Android ExoPlayer,
     strips proprietary non-standard tags (like #EXT-X-TOKEN) that break Android parsers,
-    includes automatic 404 quality fallback, and caches responses in memory.
+    includes automatic dimension alias and quality fallback, and caches responses in memory.
     """
     base_url = get_base_url(request)
     cache_key = (uuid, path, base_url)
@@ -475,7 +482,6 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
     if cached and time.time() - cached[0] < 3600:
         rewritten_content = cached[1]
     else:
-        surrit_url = f"https://surrit.com/{uuid}/{path}"
         headers = {
             "User-Agent": scraper.HEADERS["User-Agent"],
             "Referer": "https://missav.ws/",
@@ -485,49 +491,59 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
 
         session = scraper.get_session()
         actual_path = path
+        r = None
+
+        # Build candidate paths: requested path, dimension aliases, and available variant paths
+        aliases = {
+            "1080p/": ["1920x1080/"],
+            "1920x1080/": ["1080p/"],
+            "720p/": ["1280x720/"],
+            "1280x720/": ["720p/"],
+            "480p/": ["842x480/", "854x480/"],
+            "842x480/": ["480p/", "854x480/"],
+            "854x480/": ["480p/", "842x480/"],
+            "360p/": ["640x360/"],
+            "640x360/": ["360p/"],
+        }
+        candidate_paths = [path]
+        for prefix, alt_prefixes in aliases.items():
+            if path.startswith(prefix):
+                for alt_p in alt_prefixes:
+                    alt = path.replace(prefix, alt_p, 1)
+                    if alt not in candidate_paths:
+                        candidate_paths.append(alt)
+                break
+
+        # If requested path is not playlist.m3u8, check against available variants from manifest
+        if not path.endswith("playlist.m3u8"):
+            variants = scraper.get_available_variants(uuid)
+            for v in variants:
+                if path.startswith(v["quality"] + "/"):
+                    if v["path"] not in candidate_paths:
+                        candidate_paths.append(v["path"])
+            for v in variants:
+                if v["path"] not in candidate_paths:
+                    candidate_paths.append(v["path"])
+
         try:
-            r = session.get(surrit_url, headers=headers, timeout=10)
-            if r.status_code == 403:
-                r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+            for current_cand in candidate_paths:
+                for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+                    surrit_url = f"https://{domain}/{uuid}/{current_cand}"
+                    try:
+                        resp = session.get(surrit_url, headers=headers, timeout=10)
+                        if resp.status_code == 403:
+                            resp = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+                        if resp.status_code == 200:
+                            r = resp
+                            actual_path = current_cand
+                            break
+                    except Exception:
+                        pass
+                if r and r.status_code == 200:
+                    break
 
-            # Try mrstcdn.store if 404 on surrit.com
-            if r.status_code == 404:
-                alt_url = f"https://surrit.mrstcdn.store/{uuid}/{path}"
-                try:
-                    alt_r = session.get(alt_url, headers=headers, timeout=10)
-                    if alt_r.status_code == 200:
-                        r = alt_r
-                        surrit_url = alt_url
-                except Exception:
-                    pass
-
-            # Automatic fallback if requested resolution (e.g. 1080p) does not exist on origin
-            if r.status_code == 404 and re.match(r'^\d+p/', path):
-                current_q = path.split("/")[0]
-                qualities = scraper.get_available_qualities(uuid)
-                alt_qualities = [q for q in qualities if q != current_q]
-                if not alt_qualities:
-                    alt_qualities = [q for q in ["720p", "480p", "360p"] if q != current_q]
-
-                for fallback_q in alt_qualities:
-                    fallback_path = re.sub(r'^\d+p', fallback_q, path)
-                    for domain in ["surrit.com", "surrit.mrstcdn.store"]:
-                        surrit_url = f"https://{domain}/{uuid}/{fallback_path}"
-                        try:
-                            alt_r = session.get(surrit_url, headers=headers, timeout=8)
-                            if alt_r.status_code == 403:
-                                alt_r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=8)
-                            if alt_r.status_code == 200:
-                                r = alt_r
-                                actual_path = fallback_path
-                                break
-                        except Exception:
-                            pass
-                    if r.status_code == 200:
-                        break
-
-            if r.status_code != 200:
-                raise HTTPException(status_code=r.status_code, detail="Failed to fetch playlist from origin")
+            if not r or r.status_code != 200:
+                raise HTTPException(status_code=r.status_code if r else 404, detail="Failed to fetch playlist from origin")
         except HTTPException:
             raise
         except Exception as e:
@@ -661,36 +677,43 @@ def proxy_download(uuid: str, path: str, request: Request):
     Enables Nuvio's internal download manager and external downloaders (1DM, ADM, browser)
     to download full offline movies directly.
     """
-    quality_match = re.search(r"(\d+p)", path)
-    requested_quality = quality_match.group(1) if quality_match else "1080p"
+    # Build candidate paths: requested path, variants, and standard fallbacks
+    candidate_paths = []
+    if path.endswith(".m3u8"):
+        candidate_paths.append(path)
+    elif "/" not in path:
+        candidate_paths.append(f"{path}/video.m3u8")
 
-    available = scraper.get_available_qualities(uuid)
-
-    headers = {
-        "User-Agent": scraper.HEADERS["User-Agent"],
-        "Referer": "https://missav.ws/",
-        "Origin": "https://missav.ws",
-        "Accept": "*/*",
+    aliases = {
+        "1080p/": ["1920x1080/"],
+        "1920x1080/": ["1080p/"],
+        "720p/": ["1280x720/"],
+        "1280x720/": ["720p/"],
+        "480p/": ["842x480/", "854x480/"],
+        "842x480/": ["480p/", "854x480/"],
+        "854x480/": ["480p/", "842x480/"],
+        "360p/": ["640x360/"],
+        "640x360/": ["360p/"],
     }
+    for p in list(candidate_paths):
+        for prefix, alt_prefixes in aliases.items():
+            if p.startswith(prefix):
+                for alt_p in alt_prefixes:
+                    alt = p.replace(prefix, alt_p, 1)
+                    if alt not in candidate_paths:
+                        candidate_paths.append(alt)
+                break
 
-    sess = scraper.get_session()
-    segment_names = []
-    chosen_quality = requested_quality
+    variants = scraper.get_available_variants(uuid)
+    for v in variants:
+        if v["path"] not in candidate_paths:
+            candidate_paths.append(v["path"])
 
-    # Build candidates: requested quality first, then available qualities, then standard fallbacks
-    candidates = [requested_quality]
-    if available:
-        for q in available:
-            if q not in candidates:
-                candidates.append(q)
-    for q in ["720p", "480p", "360p"]:
-        if q not in candidates:
-            candidates.append(q)
-
-    # Find the first quality with accessible video.m3u8
-    for q in candidates:
+    chosen_dir = "720p"
+    # Find the first candidate path with accessible video.m3u8
+    for cand_path in candidate_paths:
         for domain in ["surrit.com", "surrit.mrstcdn.store"]:
-            surrit_url = f"https://{domain}/{uuid}/{q}/video.m3u8"
+            surrit_url = f"https://{domain}/{uuid}/{cand_path}"
             try:
                 r = sess.get(surrit_url, headers=headers, timeout=8)
                 if r.status_code == 403:
@@ -703,7 +726,7 @@ def proxy_download(uuid: str, path: str, request: Request):
                     ]
                     if lines:
                         segment_names = lines
-                        chosen_quality = q
+                        chosen_dir = cand_path.split("/")[0]
                         break
             except Exception:
                 pass
@@ -713,7 +736,7 @@ def proxy_download(uuid: str, path: str, request: Request):
     if not segment_names:
         raise HTTPException(status_code=404, detail="No video segments found for download")
 
-    quality = chosen_quality
+    quality = chosen_dir
 
     # Parse HTTP Range header if requested
     range_header = request.headers.get("range")
