@@ -259,9 +259,30 @@ def get_manifest():
 def health_endpoint():
     """Health check endpoint confirming scraper connectivity."""
     cat = scraper.fetch_catalog("missav_uncensored", page=1)
+    
+    # Test surrit
+    uuid = "27820a29-8d98-40a3-935f-67b86c2b239e"
+    surrit_res = {}
+    for imp in ["chrome124", "safari17_0", "chrome120"]:
+        try:
+            r = scraper.requests.get(
+                f"https://surrit.com/{uuid}/playlist.m3u8",
+                headers={
+                    "User-Agent": scraper.HEADERS["User-Agent"],
+                    "Referer": "https://missav.ws/",
+                    "Origin": "https://missav.ws",
+                },
+                impersonate=imp,
+                timeout=6,
+            )
+            surrit_res[imp] = {"status": r.status_code, "len": len(r.text), "sample": r.text[:150]}
+        except Exception as e:
+            surrit_res[imp] = {"error": str(e)}
+
     return JSONResponse({
         "status": "healthy",
         "catalog_items": len(cat),
+        "surrit": surrit_res,
     })
 
 
