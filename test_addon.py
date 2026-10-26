@@ -181,6 +181,33 @@ def test_stream_and_proxy():
         print(f"  PASSED: Range request returned 206 Partial Content with Content-Range: {cr} and delivered {len(chunk)} bytes!")
 
 
+def test_non_1080p_video():
+    print("Testing non-1080p title fallback (fc2-ppv-4998024)...")
+    status, _, body = fetch("/stream/movie/missav:fc2-ppv-4998024.json")
+    assert status == 200
+    data = json.loads(body.decode())
+    assert len(data.get("streams", [])) > 0
+
+    # 1. Test 1080p fallback m3u8
+    m3u8_stream = next((s for s in data["streams"] if "/proxy/m3u8/" in s["url"] and "1080p" in s["url"]), None)
+    if m3u8_stream:
+        path = m3u8_stream["url"].replace(BASE_URL, "")
+        s_m3u8, _, body_m3u8 = fetch(path)
+        assert s_m3u8 == 200
+        text = body_m3u8.decode()
+        assert "/720p/" in text, "Expected 720p fallback in segment paths"
+        print("  PASSED: 1080p m3u8 smoothly fell back to 720p segments.")
+
+    # 2. Test download endpoint with 1080p request
+    dl_stream = next((s for s in data["streams"] if "/proxy/download/" in s["url"]), None)
+    if dl_stream:
+        dl_path = dl_stream["url"].replace(BASE_URL, "")
+        head_req = urllib.request.Request(f"{BASE_URL}{dl_path}", method="HEAD")
+        with urllib.request.urlopen(head_req) as resp:
+            assert resp.status == 200
+            assert "720p" in resp.headers.get("Content-Disposition", "")
+        print("  PASSED: 1080p download smoothly fell back to 720p MP4.")
+
 
 if __name__ == "__main__":
     t = threading.Thread(target=run_server, daemon=True)
@@ -193,5 +220,6 @@ if __name__ == "__main__":
     test_search()
     test_meta()
     test_stream_and_proxy()
+    test_non_1080p_video()
     print("\nALL TESTS PASSED SUCCESSFULLY! Addon is 100% operational.")
     sys.exit(0)

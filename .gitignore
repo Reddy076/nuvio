@@ -7,7 +7,18 @@ access.log
 attachments/
 .env
 .venv
-.gradle/
+
+# Android Project & Build Files (Ignored for Render Python deployment)
+app/
 build/
-app/build/
+.gradle/
+*.gradle
+gradle.properties
+gradlew
+gradlew.bat
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
 *.hprof

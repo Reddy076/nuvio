@@ -484,10 +484,22 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
         }
 
         session = scraper.get_session()
+        actual_path = path
         try:
             r = session.get(surrit_url, headers=headers, timeout=10)
             if r.status_code == 403:
                 r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+
+            # Try mrstcdn.store if 404 on surrit.com
+            if r.status_code == 404:
+                alt_url = f"https://surrit.mrstcdn.store/{uuid}/{path}"
+                try:
+                    alt_r = session.get(alt_url, headers=headers, timeout=10)
+                    if alt_r.status_code == 200:
+                        r = alt_r
+                        surrit_url = alt_url
+                except Exception:
+                    pass
 
             # Automatic fallback if requested resolution (e.g. 1080p) does not exist on origin
             if r.status_code == 404 and re.match(r'^\d+p/', path):
@@ -495,10 +507,17 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
                 fallback_q = qualities[0] if qualities else "720p"
                 fallback_path = re.sub(r'^\d+p', fallback_q, path)
                 if fallback_path != path:
-                    surrit_url = f"https://surrit.com/{uuid}/{fallback_path}"
-                    r = session.get(surrit_url, headers=headers, timeout=10)
-                    if r.status_code == 403:
-                        r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+                    for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+                        surrit_url = f"https://{domain}/{uuid}/{fallback_path}"
+                        try:
+                            r = session.get(surrit_url, headers=headers, timeout=10)
+                            if r.status_code == 403:
+                                r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+                            if r.status_code == 200:
+                                actual_path = fallback_path
+                                break
+                        except Exception:
+                            pass
 
             if r.status_code != 200:
                 raise HTTPException(status_code=r.status_code, detail="Failed to fetch playlist from origin")
@@ -510,8 +529,8 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
 
         content = r.text
 
-        # Determine directory path for relative resolutions (e.g. '720p' if path is '720p/video.m3u8')
-        path_parts = path.split("/")
+        # Determine directory path for relative resolutions using actual_path
+        path_parts = actual_path.split("/")
         dir_prefix = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
 
         # Master playlist reorganization: sort stream variants from highest bandwidth to lowest
@@ -636,13 +655,10 @@ def proxy_download(uuid: str, path: str, request: Request):
     to download full offline movies directly.
     """
     quality_match = re.search(r"(\d+p)", path)
-    quality = quality_match.group(1) if quality_match else "720p"
+    requested_quality = quality_match.group(1) if quality_match else "1080p"
 
     available = scraper.get_available_qualities(uuid)
-    if quality not in available and available:
-        quality = available[0]
 
-    surrit_url = f"https://surrit.com/{uuid}/{quality}/video.m3u8"
     headers = {
         "User-Agent": scraper.HEADERS["User-Agent"],
         "Referer": "https://missav.ws/",
@@ -650,26 +666,47 @@ def proxy_download(uuid: str, path: str, request: Request):
         "Accept": "*/*",
     }
 
-    try:
-        # Use Safari TLS impersonation to bypass Cloudflare
-        sess = scraper.requests.Session(impersonate="safari17_0")
-        r = sess.get(surrit_url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            # Fallback to shared scraper session
-            r = scraper.get_session().get(surrit_url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            raise HTTPException(status_code=r.status_code, detail="Failed to fetch segment list")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Playlist fetch error: {e}")
+    sess = scraper.get_session()
+    segment_names = []
+    chosen_quality = requested_quality
 
-    segment_names = [
-        line.strip()
-        for line in r.text.splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # Build candidates: requested quality first, then available qualities, then standard fallbacks
+    candidates = [requested_quality]
+    if available:
+        for q in available:
+            if q not in candidates:
+                candidates.append(q)
+    for q in ["720p", "480p", "360p"]:
+        if q not in candidates:
+            candidates.append(q)
+
+    # Find the first quality with accessible video.m3u8
+    for q in candidates:
+        for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+            surrit_url = f"https://{domain}/{uuid}/{q}/video.m3u8"
+            try:
+                r = sess.get(surrit_url, headers=headers, timeout=8)
+                if r.status_code == 403:
+                    r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=8)
+                if r.status_code == 200 and r.text:
+                    lines = [
+                        line.strip()
+                        for line in r.text.splitlines()
+                        if line.strip() and not line.startswith("#")
+                    ]
+                    if lines:
+                        segment_names = lines
+                        chosen_quality = q
+                        break
+            except Exception:
+                pass
+        if segment_names:
+            break
 
     if not segment_names:
-        raise HTTPException(status_code=404, detail="No video segments found")
+        raise HTTPException(status_code=404, detail="No video segments found for download")
+
+    quality = chosen_quality
 
     # Parse HTTP Range header if requested
     range_header = request.headers.get("range")
@@ -688,24 +725,13 @@ def proxy_download(uuid: str, path: str, request: Request):
 
     if start_byte > 0:
         cum = 0
-        sess_head = scraper.requests.Session(impersonate="safari17_0")
+        avg_size = (
+            int(sum(cache_dict.values()) / len(cache_dict))
+            if cache_dict
+            else (1200000 if quality == "1080p" else 750000)
+        )
         for idx, seg_name in enumerate(segment_names):
-            size = cache_dict.get(seg_name)
-            if size is None:
-                try:
-                    head_r = sess_head.head(
-                        f"https://surrit.com/{uuid}/{quality}/{seg_name}",
-                        headers=headers,
-                        timeout=5,
-                    )
-                    if head_r.status_code == 200 and "content-length" in head_r.headers:
-                        size = int(head_r.headers["content-length"])
-                    else:
-                        size = 750000
-                except Exception:
-                    size = 750000
-                cache_dict[seg_name] = size
-
+            size = cache_dict.get(seg_name, avg_size)
             if cum + size > start_byte:
                 start_seg_idx = idx
                 intra_offset = start_byte - cum
@@ -730,29 +756,17 @@ def proxy_download(uuid: str, path: str, request: Request):
         return Response(status_code=status_code, headers=resp_headers)
 
     def iter_video():
-        # Dedicated persistent session with Safari TLS impersonation for HTTP/2 multiplexing
-        dl_sess = scraper.requests.Session(impersonate="safari17_0")
         bytes_sent = 0
         for idx in range(start_seg_idx, len(segment_names)):
             seg_name = segment_names[idx]
-            seg_url = f"https://surrit.com/{uuid}/{quality}/{seg_name}"
-            chunk_data = None
-            for attempt in range(3):
-                try:
-                    seg_r = dl_sess.get(seg_url, headers=headers, timeout=12)
-                    if seg_r.status_code == 200:
-                        chunk_data = seg_r.content
-                        cache_dict[seg_name] = len(chunk_data)
-                        break
-                    elif seg_r.status_code in [403, 429]:
-                        dl_sess = scraper.requests.Session(impersonate="safari17_0")
-                        time.sleep(0.2)
-                except Exception:
-                    time.sleep(0.3)
-                    continue
-
-            if not chunk_data:
+            seg_path = f"{quality}/{seg_name}"
+            # Use fetch_surrit_segment for multi-CDN, quality fallback, and retry handling
+            r = scraper.fetch_surrit_segment(uuid, seg_path)
+            if not r or r.status_code not in [200, 206]:
                 continue
+
+            chunk_data = r.content
+            cache_dict[seg_name] = len(chunk_data)
 
             if idx == start_seg_idx and intra_offset > 0:
                 out = chunk_data[intra_offset:]

@@ -448,24 +448,31 @@ def get_video_stream_info(slug: str) -> Optional[Dict]:
     # Extract UUID
     uuid = None
 
-    # 1. Unpacked JS check
+    # 1. Unpacked JS check (match stream URL first, ignoring preview UUIDs)
     unpacked_blocks = extract_packer_blocks(page_html)
     for block in unpacked_blocks:
-        match = re.search(r'surrit\.com/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', block)
+        match = re.search(r'https?://[^/]+/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/(?:playlist|\d+p)', block)
         if match:
             uuid = match.group(1)
             break
+        match_surrit = re.search(r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/(?:playlist|\d+p)', block)
+        if match_surrit:
+            uuid = match_surrit.group(1)
+            break
 
-    # 2. Raw HTML check
+    # 2. Raw HTML check for video stream URL (not preview)
     if not uuid:
-        match = re.search(r'surrit\.com/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', page_html)
+        match = re.search(r'https?://(?:surrit\.com|surrit\.mrstcdn\.store)/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})', page_html)
         if match:
             uuid = match.group(1)
 
+    # 3. Fallback to any UUID in packed blocks
     if not uuid:
-        uuids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', page_html)
-        if uuids:
-            uuid = uuids[0]
+        for block in unpacked_blocks:
+            uuids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', block)
+            if uuids:
+                uuid = uuids[0]
+                break
 
     if not uuid:
         logger.error(f"Failed to find UUID for slug {clean_slug}")
@@ -498,16 +505,15 @@ def get_video_stream_info(slug: str) -> Optional[Dict]:
 
 def get_available_qualities(uuid: str) -> List[str]:
     """
-    Checks the master playlist for a given UUID and returns available quality names
-    sorted descending (e.g. ['1080p', '720p', '480p', '360p'] or ['720p', '480p', '360p']).
-    Never offers non-existent qualities to prevent 404 player buffering.
+    Checks origin CDNs for a given UUID and returns available quality names
+    sorted descending (e.g. ['1080p', '720p', '480p', '360p']).
+    Directly tests 1080p to ensure 1080p is never missed on slow connections.
     """
     cache_key = f"qualities:{uuid}"
     cached = _get_cache(cache_key)
     if cached:
         return cached
 
-    url = f"https://surrit.com/{uuid}/playlist.m3u8"
     headers = {
         "User-Agent": HEADERS["User-Agent"],
         "Referer": "https://missav.ws/",
@@ -515,36 +521,55 @@ def get_available_qualities(uuid: str) -> List[str]:
         "Accept": "*/*",
     }
 
-    try:
-        sess = get_session()
-        r = sess.get(url, headers=headers, timeout=6)
-        if r.status_code == 200:
-            found = set(re.findall(r"(\d+p)/video\.m3u8", r.text))
-            def res_key(q):
-                try:
-                    return int(q.rstrip("p"))
-                except ValueError:
-                    return 0
-            sorted_qualities = sorted(list(found), key=res_key, reverse=True)
-            if sorted_qualities:
-                _set_cache(cache_key, sorted_qualities)
-                return sorted_qualities
-    except Exception as e:
-        logger.warning(f"Could not determine qualities for {uuid}: {e}")
+    sess = get_session()
+    qualities_found = set()
 
-    # Fallback to standard HD/SD
-    fallback = ["720p", "480p", "360p"]
-    _set_cache(cache_key, fallback)
-    return fallback
+    # 1. Parse playlist.m3u8 on surrit.com and surrit.mrstcdn.store
+    for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+        url = f"https://{domain}/{uuid}/playlist.m3u8"
+        try:
+            r = sess.get(url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                found = set(re.findall(r"(\d+p)/video\.m3u8", r.text))
+                if found:
+                    qualities_found.update(found)
+                    break
+        except Exception as e:
+            logger.debug(f"Failed to check playlist on {domain} for {uuid}: {e}")
+
+    # 2. Check if 1080p is directly accessible even if missing from master playlist
+    if "1080p" not in qualities_found:
+        for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+            try:
+                r = sess.head(f"https://{domain}/{uuid}/1080p/video.m3u8", headers=headers, timeout=4)
+                if r.status_code == 200:
+                    qualities_found.add("1080p")
+                    break
+            except Exception:
+                pass
+
+    def res_key(q):
+        try:
+            return int(q.rstrip("p"))
+        except ValueError:
+            return 0
+
+    if qualities_found:
+        sorted_qualities = sorted(list(qualities_found), key=res_key, reverse=True)
+        _set_cache(cache_key, sorted_qualities)
+        return sorted_qualities
+
+    # If network temporarily failed, return standard qualities without caching permanently
+    return ["1080p", "720p", "480p", "360p"]
 
 
 def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = None, is_head: bool = False):
     """
-    Fetches an MPEG-TS segment from surrit CDN with Chrome TLS impersonation and automatic retries.
-    Maps .ts back to .jpeg for origin and handles Range requests properly.
+    Fetches an MPEG-TS segment from origin CDN with automatic quality and domain fallback.
+    Maps .ts back to .jpeg for origin. If a 1080p chunk returns 404, automatically falls back
+    to 720p chunk so video playback never stops or errors.
     """
     surrit_path = path[:-3] + ".jpeg" if path.endswith(".ts") else path
-    surrit_url = f"https://surrit.com/{uuid}/{surrit_path}"
 
     headers = {
         "User-Agent": HEADERS["User-Agent"],
@@ -555,43 +580,29 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
     if range_header:
         headers["Range"] = range_header
 
-    # Retry loop with session recovery
-    for attempt in range(3):
-        try:
-            sess = get_session()
-            if is_head:
-                r = sess.head(surrit_url, headers=headers, timeout=6)
-            else:
-                r = sess.get(surrit_url, headers=headers, timeout=10)
+    paths_to_try = [surrit_path]
+    if surrit_path.startswith("1080p/"):
+        paths_to_try.append(surrit_path.replace("1080p/", "720p/", 1))
 
-            if r.status_code in [200, 206]:
-                return r
-            elif r.status_code == 403:
-                reset_session()
-                # Try safari impersonation on 403
+    sess = get_session()
+    for current_path in paths_to_try:
+        for domain in ["surrit.com", "surrit.mrstcdn.store"]:
+            surrit_url = f"https://{domain}/{uuid}/{current_path}"
+            for attempt in range(2):
                 try:
-                    alt_sess = requests.Session(impersonate="safari17_0")
-                    alt_r = alt_sess.head(surrit_url, headers=headers, timeout=6) if is_head else alt_sess.get(surrit_url, headers=headers, timeout=10)
-                    if alt_r.status_code in [200, 206]:
-                        return alt_r
-                except Exception:
-                    pass
-                time.sleep(0.2)
-        except Exception as e:
-            logger.debug(f"Attempt {attempt+1} failed for {surrit_url}: {e}")
-            reset_session()
-            time.sleep(0.25)
+                    if is_head:
+                        r = sess.head(surrit_url, headers=headers, timeout=6)
+                    else:
+                        r = sess.get(surrit_url, headers=headers, timeout=10)
 
-    # Final standalone fallback request
-    for imp in ["chrome120", "safari17_0"]:
-        try:
-            if is_head:
-                r = requests.head(surrit_url, headers=headers, impersonate=imp, timeout=8)
-            else:
-                r = requests.get(surrit_url, headers=headers, impersonate=imp, timeout=12)
-            if r.status_code in [200, 206]:
-                return r
-        except Exception:
-            pass
+                    if r.status_code in [200, 206]:
+                        return r
+                    elif r.status_code == 403:
+                        reset_session()
+                        sess = get_session()
+                        time.sleep(0.15)
+                except Exception:
+                    time.sleep(0.15)
+
     return None
 
