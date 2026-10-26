@@ -34,8 +34,9 @@ def test_manifest():
     assert status == 200
     data = json.loads(body.decode())
     assert data["id"] == "community.missav"
-    assert len(data["catalogs"]) >= 4
-    print("  PASSED: Manifest returned valid Stremio metadata.")
+    assert len(data["catalogs"]) == 1
+    assert data["catalogs"][0]["id"] == "missav_uncensored"
+    print("  PASSED: Manifest returned valid Stremio metadata with single catalog.")
 
 
 def test_catalog():

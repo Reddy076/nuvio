@@ -89,40 +89,7 @@ MANIFEST = {
         {
             "type": "movie",
             "id": "missav_uncensored",
-            "name": "MissAV Uncensored Leak",
-            "extra": [
-                {"name": "search", "isRequired": False},
-                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
-                {"name": "skip", "isRequired": False},
-            ],
-            "extraSupported": ["search", "sort", "skip"],
-        },
-        {
-            "type": "movie",
-            "id": "missav_release",
-            "name": "MissAV Recent Releases",
-            "extra": [
-                {"name": "search", "isRequired": False},
-                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
-                {"name": "skip", "isRequired": False},
-            ],
-            "extraSupported": ["search", "sort", "skip"],
-        },
-        {
-            "type": "movie",
-            "id": "missav_new",
-            "name": "MissAV New",
-            "extra": [
-                {"name": "search", "isRequired": False},
-                {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
-                {"name": "skip", "isRequired": False},
-            ],
-            "extraSupported": ["search", "sort", "skip"],
-        },
-        {
-            "type": "movie",
-            "id": "missav_chinese",
-            "name": "MissAV Chinese Subtitles",
+            "name": "MissAV",
             "extra": [
                 {"name": "search", "isRequired": False},
                 {"name": "sort", "isRequired": False, "options": SORT_OPTIONS},
@@ -250,7 +217,7 @@ def home(request: Request):
 
             <h3>Features:</h3>
             <ul class="features">
-                <li><strong>Multiple Catalogs:</strong> Uncensored Leaks, New Releases, Recent, and Chinese Subtitles.</li>
+                <li><strong>MissAV Catalog:</strong> High-speed browsing and live search across MissAV releases.</li>
                 <li><strong>Instant Details:</strong> Sub-millisecond metadata delivery preventing Android detail load timeouts.</li>
                 <li><strong>Full Search:</strong> Search by video ID (e.g. <code>nhdtb-213</code>), actress, or title.</li>
                 <li><strong>Built-in HLS Proxy:</strong> Seamless playback on Android / ExoPlayer avoiding Cloudflare 403 Forbidden blocks.</li>

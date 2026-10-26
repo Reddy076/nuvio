@@ -170,59 +170,26 @@ object MissAvRepository {
         }
     }
 
-    // Home Shelves: 4 Official MissAV Catalogs from the Addon
+    // Home Shelf: Single Official MissAV Catalog from the Addon
     fun getInitialHomeSections(): List<CatalogSection> {
         return listOf(
             CatalogSection(
                 id = "missav_uncensored",
-                title = "MissAV Uncensored Leaks - Adult",
-                items = catalogMap["missav_uncensored"]?.toList() ?: emptyList()
-            ),
-            CatalogSection(
-                id = "missav_release",
-                title = "MissAV Recent Releases - Movies",
-                items = catalogMap["missav_release"]?.toList() ?: emptyList()
-            ),
-            CatalogSection(
-                id = "missav_new",
-                title = "MissAV New Releases - Movies",
-                items = catalogMap["missav_new"]?.toList() ?: emptyList()
-            ),
-            CatalogSection(
-                id = "missav_chinese",
-                title = "MissAV Chinese Subtitles - Movies",
-                items = catalogMap["missav_chinese"]?.toList() ?: emptyList()
+                title = "MissAV",
+                items = catalogMap["missav_uncensored"]?.toList() ?: allVideosMap.values.toList()
             )
         )
     }
 
     suspend fun getHomeSections(): List<CatalogSection> = withContext(Dispatchers.IO) {
         // Attempt live fetch from Addon server
-        val uncensored = fetchCatalogFromAddon("missav_uncensored") ?: catalogMap["missav_uncensored"] ?: emptyList()
-        val release = fetchCatalogFromAddon("missav_release") ?: catalogMap["missav_release"] ?: emptyList()
-        val newRel = fetchCatalogFromAddon("missav_new") ?: catalogMap["missav_new"] ?: emptyList()
-        val chinese = fetchCatalogFromAddon("missav_chinese") ?: catalogMap["missav_chinese"] ?: emptyList()
+        val uncensored = fetchCatalogFromAddon("missav_uncensored") ?: catalogMap["missav_uncensored"] ?: allVideosMap.values.toList()
 
         listOf(
             CatalogSection(
                 id = "missav_uncensored",
-                title = "MissAV Uncensored Leaks - Adult",
+                title = "MissAV",
                 items = uncensored
-            ),
-            CatalogSection(
-                id = "missav_release",
-                title = "MissAV Recent Releases - Movies",
-                items = release
-            ),
-            CatalogSection(
-                id = "missav_new",
-                title = "MissAV New Releases - Movies",
-                items = newRel
-            ),
-            CatalogSection(
-                id = "missav_chinese",
-                title = "MissAV Chinese Subtitles - Movies",
-                items = chinese
             )
         )
     }
@@ -612,9 +579,6 @@ object MissAvRepository {
         }
 
         catalogMap["missav_uncensored"] = allVideosMap.values.filter { it.isUncensored }.toMutableList()
-        catalogMap["missav_release"] = allVideosMap.values.take(8).toMutableList()
-        catalogMap["missav_new"] = allVideosMap.values.reversed().take(8).toMutableList()
-        catalogMap["missav_chinese"] = allVideosMap.values.filter { it.slug().contains("chinese") || !it.isUncensored }.toMutableList()
     }
 
     suspend fun fetchMetaDetails(type: String, id: String): MetaDetails = withContext(Dispatchers.IO) {

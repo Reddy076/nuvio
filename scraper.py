@@ -419,6 +419,7 @@ def fetch_catalog(category: str, page: int = 1, sort: Optional[str] = None) -> L
             return stale
 
     cat_map = {
+        "missav": "uncensored-leak",
         "missav_uncensored": "uncensored-leak",
         "missav_new": "new",
         "missav_release": "release",

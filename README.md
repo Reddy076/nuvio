@@ -15,11 +15,8 @@ A high-performance **Nuvio & Stremio Addon** for browsing and streaming media di
   - 720p HD
   - 480p SD
   - Direct CDN Stream (with `behaviorHints.proxyHeaders`)
-- **📚 Rich Catalogs & Discover:**
-  - MissAV Uncensored Leak
-  - MissAV Recent Releases
-  - MissAV New
-  - MissAV Chinese Subtitles
+- **📚 Unified MissAV Catalog & Discover:**
+  - Single streamlined **MissAV** catalog for fast home shelf loading and clean search results without duplicate catalog rows.
 - **🔍 Fast Search:** Search titles, series codes (e.g. `nhdtb-213`, `snos-359`), and actresses directly from Nuvio's search bar.
 - **🚀 In-Memory Caching:** Caches scraped pages and streams for 15 minutes for sub-10ms response times.
 
@@ -72,14 +69,14 @@ python3 app.py --host 0.0.0.0 --port 7000
      ```
 4. Tap **Install**!
 
-### 4. Viewing Catalogs & Adding to Nuvio Home Screen
+### 4. Viewing Catalog & Adding to Nuvio Home Screen
 
 - **In Discover Tab:**
-  Open Nuvio's **Discover** (compass/grid icon) tab. Select **MissAV** from the addon filter to immediately browse all catalogs: *Uncensored Leak*, *Recent Releases*, *New*, and *Chinese Subtitles*.
+  Open Nuvio's **Discover** (compass/grid icon) tab. Select **MissAV** from the addon filter to browse the catalog.
 - **To Pin to Nuvio Home Screen:**
-  In Nuvio, new addon rows are not pinned to the main home screen by default. To make them appear on the home screen:
+  In Nuvio, new addon rows are not pinned to the main home screen by default. To make it appear on the home screen:
   1. Open Nuvio **Settings** > **Reorder Home Catalogs** (or **Settings > Content & Discovery > Home Catalogs**).
-  2. Turn on the toggles for the MissAV catalogs and drag them to the top.
+  2. Turn on the toggle for **MissAV** and drag it to the top.
 - **Search (Actress & Title):**
   Use the Nuvio search bar to search for any:
   - **Actress Name:** e.g., `Yua Mikami`, `Eimi Fukada`, `Karen Yuzuriha`
