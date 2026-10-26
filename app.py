@@ -437,6 +437,9 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
         session = scraper.get_session()
         try:
             r = session.get(surrit_url, headers=headers, timeout=10)
+            if r.status_code == 403:
+                r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
+
             # Automatic fallback if requested resolution (e.g. 1080p) does not exist on origin
             if r.status_code == 404 and re.match(r'^\d+p/', path):
                 qualities = scraper.get_available_qualities(uuid)
@@ -445,6 +448,8 @@ def proxy_m3u8(uuid: str, path: str, request: Request):
                 if fallback_path != path:
                     surrit_url = f"https://surrit.com/{uuid}/{fallback_path}"
                     r = session.get(surrit_url, headers=headers, timeout=10)
+                    if r.status_code == 403:
+                        r = scraper.requests.get(surrit_url, headers=headers, impersonate="safari17_0", timeout=10)
 
             if r.status_code != 200:
                 raise HTTPException(status_code=r.status_code, detail="Failed to fetch playlist from origin")

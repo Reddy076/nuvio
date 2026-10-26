@@ -50,7 +50,7 @@ def get_session() -> requests.Session:
     """Returns a shared curl_cffi session with Chrome TLS impersonation."""
     global _session
     if _session is None:
-        _session = requests.Session(impersonate="chrome124")
+        _session = requests.Session(impersonate="chrome120")
     return _session
 
 
@@ -270,7 +270,7 @@ def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
                 req_headers = dict(HEADERS)
                 req_headers["Referer"] = f"{origin}/"
                 req_headers["Origin"] = origin
-                r = requests.get(url, headers=req_headers, impersonate="chrome124", timeout=4)
+                r = requests.get(url, headers=req_headers, impersonate="chrome120", timeout=4)
                 if r.status_code == 200 and len(r.text) > 1000 and "Just a moment..." not in r.text:
                     return r.text
             except Exception as e:
@@ -527,6 +527,14 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
                 return r
             elif r.status_code == 403:
                 reset_session()
+                # Try safari impersonation on 403
+                try:
+                    alt_sess = requests.Session(impersonate="safari17_0")
+                    alt_r = alt_sess.head(surrit_url, headers=headers, timeout=6) if is_head else alt_sess.get(surrit_url, headers=headers, timeout=10)
+                    if alt_r.status_code in [200, 206]:
+                        return alt_r
+                except Exception:
+                    pass
                 time.sleep(0.2)
         except Exception as e:
             logger.debug(f"Attempt {attempt+1} failed for {surrit_url}: {e}")
@@ -534,13 +542,15 @@ def fetch_surrit_segment(uuid: str, path: str, range_header: Optional[str] = Non
             time.sleep(0.25)
 
     # Final standalone fallback request
-    try:
-        if is_head:
-            r = requests.head(surrit_url, headers=headers, impersonate="chrome124", timeout=8)
-        else:
-            r = requests.get(surrit_url, headers=headers, impersonate="chrome124", timeout=12)
-        return r
-    except Exception as e:
-        logger.error(f"All segment fetch attempts failed for {surrit_url}: {e}")
-        return None
+    for imp in ["chrome120", "safari17_0"]:
+        try:
+            if is_head:
+                r = requests.head(surrit_url, headers=headers, impersonate=imp, timeout=8)
+            else:
+                r = requests.get(surrit_url, headers=headers, impersonate=imp, timeout=12)
+            if r.status_code in [200, 206]:
+                return r
+        except Exception:
+            pass
+    return None
 
