@@ -254,6 +254,36 @@ def get_manifest():
     return JSONResponse(MANIFEST)
 
 
+@app.get("/debug")
+def debug_endpoint():
+    """Diagnostic endpoint to inspect live scraper connectivity."""
+    import traceback
+    res = {"mirrors": {}}
+    for m in scraper.MIRRORS:
+        url = f"{m}/en/uncensored-leak"
+        try:
+            r = scraper.requests.get(url, headers=scraper.HEADERS, impersonate="chrome124", timeout=6)
+            cards = scraper.parse_video_cards(r.text)
+            res["mirrors"][m] = {"status": r.status_code, "len": len(r.text), "cards": len(cards), "sample": r.text[:200]}
+        except Exception as e:
+            res["mirrors"][m] = {"error": str(e)}
+
+    try:
+        cat = scraper.fetch_catalog("missav_uncensored", page=1)
+        res["fetch_catalog_len"] = len(cat)
+    except Exception as e:
+        res["fetch_catalog_err"] = str(e)
+
+    try:
+        info = scraper.get_video_stream_info("nhdtb-213-uncensored-leak")
+        res["stream_info"] = info
+    except Exception as e:
+        res["stream_err"] = str(e)
+
+    return JSONResponse(res)
+
+
+
 def parse_extra_params(extra_str: str) -> dict:
     """Parses extra parameters formatted like 'key=value&key2=value2' or 'key=value'."""
     params = {}
