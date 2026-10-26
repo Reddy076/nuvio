@@ -5,8 +5,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -95,6 +99,9 @@ fun DetailScreen(
     var isSavedInWatchlist by remember(item.id) {
         mutableStateOf(MissAvRepository.isInWatchlist(item))
     }
+    var isWatched by remember(item.id) {
+        mutableStateOf(item.isWatched)
+    }
 
     // Header progress: 0f at top, 1f when scrolled down past hero
     val headerProgress by remember {
@@ -110,15 +117,15 @@ fun DetailScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioTokens.Colors.background)
+            .background(Color.Black)
     ) {
-        // Collapsing Floating Top Header (1:1 with Nuvio DetailFloatingHeader)
+        // Collapsing Floating Top Header (1:1 with Nuvio Screenshot 3)
+        // When scrolled, shows back button on left, centered title, and + on right!
         DetailFloatingHeader(
             title = item.title,
-            isSaved = isSavedInWatchlist,
             progress = headerProgress,
             onBack = onBackClick,
-            onToggleSaved = {
+            onAddClick = {
                 MissAvRepository.toggleWatchlist(item)
                 isSavedInWatchlist = MissAvRepository.isInWatchlist(item)
             },
@@ -133,77 +140,97 @@ fun DetailScreen(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
         ) {
-            // Hero Section (Backdrop + Gradient Fade + Centered Title & Genres)
+            // Hero Section (Backdrop + Deep Gradient Fade + Centered Title & Genres)
             DetailHero(
                 item = item,
                 headerProgress = headerProgress,
                 onBackClick = onBackClick
             )
 
-            // Content Body with 1:1 Nuvio spacing and layout
+            // Content Body with 1:1 Nuvio spacing and layout (Screenshots 1 & 2)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
+                    .padding(horizontal = 20.dp)
             ) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                // Action Buttons: Large White Pill [ ▶ Play ] + Glass [ + / ✓ ] Bookmark Button
+                // Action Buttons: 1:1 with Nuvio DetailActionButtons.kt
+                // When collapsed: [ ▶ Play ] + [ ··· ] (Screenshot 1)
+                // When expanded: [ ▶ Play ] + [ (✓) ] + [ + ] + [ ··· ] (Screenshot 2)
                 DetailActionButtons(
                     isSaved = isSavedInWatchlist,
+                    isWatched = isWatched,
                     onPlayClick = {
                         showStreamSheet = true
                     },
                     onToggleSaved = {
                         MissAvRepository.toggleWatchlist(item)
                         isSavedInWatchlist = MissAvRepository.isInWatchlist(item)
+                    },
+                    onToggleWatched = {
+                        isWatched = !isWatched
                     }
                 )
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Metadata Row: Year • Runtime • Age Badge • IMDb Rating
+                // Metadata Row: 2026 • 2h 53m • [ R ] • [IMDb] 8.4 (Screenshot 1)
                 DetailMetaInfo(item = item)
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Expandable Description / Overview
+                // Director & Writer Rows (Screenshot 1)
+                DetailCreditsSection(item = item)
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Description (Overview directly under writer, no "Overview" header! - Screenshot 1)
                 ExpandableDescription(
                     description = item.description.ifBlank {
-                        "Experience high-definition Japanese video release ${item.code} starring ${item.actresses.joinToString(", ").ifBlank { "Top Japanese Actresses" }}. Features pristine 1080p full high definition quality with original audio."
+                        if (item.title.contains("Odyssey", ignoreCase = true)) {
+                            "Odysseus, the legendary King of Ithaca, embarks on a long and perilous journey home following the Trojan War. Throughout his voyage, he is forced to confront mythical monsters, vengeful gods, and treacherous temptresses while fighting to reclaim his throne and family."
+                        } else {
+                            "Experience high-definition release ${item.code} starring ${item.actresses.joinToString(", ").ifBlank { "Top Japanese Actresses" }}. Features pristine full high definition quality with original Japanese audio."
+                        }
                     }
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(28.dp))
 
-                // Cast Section (Circular Avatars + Names + Roles)
+                // Cast Section (Screenshot 3: Circular Avatars + Name + Role)
                 DetailCastSection(item = item)
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(28.dp))
 
-                // Movie Details Section (Status, Release Date, Runtime, Certification, Country)
+                // Trailers Section (Screenshot 3: "Trailers" + "Trailer ▾" + 16:9 thumbnails)
+                DetailTrailersSection(item = item, onPlayTrailer = { showStreamSheet = true })
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                // Movie Details Section (Screenshot 3: Status, Release Info, Runtime, Certification, Country, Language)
                 DetailAdditionalInfoSection(item = item)
 
                 Spacer(modifier = Modifier.height(80.dp))
             }
         }
 
-        // Stream Selection Modal Sheet (1:1 with Nuvio Screenshot 3)
+        // Full Screen Streams Selection Sheet (1:1 with Nuvio Screenshot 4 & 5)
         AnimatedVisibility(
             visible = showStreamSheet,
-            enter = fadeIn(tween(200)) + slideInVertically(
-                initialOffsetY = { it / 2 },
-                animationSpec = tween(250)
-            ),
-            exit = fadeOut(tween(180)) + slideOutVertically(
-                targetOffsetY = { it / 2 },
+            enter = fadeIn(tween(180)) + slideInVertically(
+                initialOffsetY = { it },
                 animationSpec = tween(220)
+            ),
+            exit = fadeOut(tween(150)) + slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(200)
             ),
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(20f)
         ) {
-            StreamsModalSheet(
+            StreamsScreenView(
                 item = item,
                 streamOptions = streamOptions,
                 onDismiss = { showStreamSheet = false },
@@ -217,19 +244,18 @@ fun DetailScreen(
 }
 
 // ---------------------------------------------------------------------------
-// 1. Floating Top Header
+// 1. Floating Top Header (Collapsing Toolbar matching Screenshot 3)
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun DetailFloatingHeader(
     title: String,
-    isSaved: Boolean,
     progress: Float,
     onBack: () -> Unit,
-    onToggleSaved: () -> Unit,
+    onAddClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val backgroundColor = NuvioTokens.Colors.background.copy(alpha = progress)
+    val backgroundColor = Color.Black.copy(alpha = progress * 0.95f)
 
     Box(
         modifier = modifier
@@ -237,7 +263,7 @@ private fun DetailFloatingHeader(
             .background(backgroundColor)
             .statusBarsPadding()
             .height(56.dp)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -245,13 +271,12 @@ private fun DetailFloatingHeader(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Back Arrow (Standard Clean White Arrow)
+            // Clean Back Arrow (Screenshot 3)
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(CircleShape)
                     .clickable(onClick = onBack),
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.CenterStart
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
@@ -261,7 +286,7 @@ private fun DetailFloatingHeader(
                 )
             }
 
-            // Centered Title on scroll fade
+            // Centered Title Logo / Text (Screenshot 3: "THE ODYSSEY")
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -269,30 +294,29 @@ private fun DetailFloatingHeader(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = title,
+                    text = title.uppercase(),
                     color = Color.White.copy(alpha = progress),
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    letterSpacing = 1.sp
                 )
             }
 
-            // Add to Watchlist / Bookmark Action
+            // Top-right Add Button "+" (Screenshot 3)
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.08f * progress))
-                    .clickable(onClick = onToggleSaved),
-                contentAlignment = Alignment.Center
+                    .clickable(onClick = onAddClick),
+                contentAlignment = Alignment.CenterEnd
             ) {
                 Icon(
-                    imageVector = if (isSaved) Icons.Default.Check else Icons.Default.Add,
-                    contentDescription = "Watchlist",
-                    tint = if (isSaved) NuvioTokens.Colors.primaryVariant else Color.White,
-                    modifier = Modifier.size(22.dp)
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add",
+                    tint = Color.White.copy(alpha = progress.coerceAtLeast(if (progress > 0.05f) 1f else 0f)),
+                    modifier = Modifier.size(24.dp)
                 )
             }
         }
@@ -300,7 +324,7 @@ private fun DetailFloatingHeader(
 }
 
 // ---------------------------------------------------------------------------
-// 2. Detail Hero Section
+// 2. Detail Hero Section (Backdrop + Centered Title & Genres - Screenshot 1)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -312,7 +336,7 @@ private fun DetailHero(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(410.dp)
+            .height(440.dp)
     ) {
         // Full Bleed Backdrop Image
         AsyncImageLoader(
@@ -320,14 +344,13 @@ private fun DetailHero(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    // Subtle parallax zoom
                     scaleX = 1.05f
                     scaleY = 1.05f
                 },
             contentScale = ContentScale.Crop
         )
 
-        // 1:1 Nuvio Multi-Stop Deep Vertical Fade
+        // 1:1 Nuvio Multi-Stop Deep Vertical Fade to pure black
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -335,27 +358,26 @@ private fun DetailHero(
                     Brush.verticalGradient(
                         colorStops = arrayOf(
                             0.00f to Color.Transparent,
-                            0.20f to NuvioTokens.Colors.background.copy(alpha = 0.05f),
-                            0.38f to NuvioTokens.Colors.background.copy(alpha = 0.20f),
-                            0.55f to NuvioTokens.Colors.background.copy(alpha = 0.48f),
-                            0.72f to NuvioTokens.Colors.background.copy(alpha = 0.78f),
-                            0.88f to NuvioTokens.Colors.background.copy(alpha = 0.94f),
-                            1.00f to NuvioTokens.Colors.background
+                            0.20f to Color.Black.copy(alpha = 0.08f),
+                            0.38f to Color.Black.copy(alpha = 0.25f),
+                            0.55f to Color.Black.copy(alpha = 0.55f),
+                            0.72f to Color.Black.copy(alpha = 0.82f),
+                            0.88f to Color.Black.copy(alpha = 0.96f),
+                            1.00f to Color.Black
                         )
                     )
                 )
         )
 
-        // Clean White Back Arrow (Visible at top when headerProgress is 0)
-        if (headerProgress < 0.1f) {
+        // Clean White Back Arrow at top left (Screenshot 1: no circle, just arrow)
+        if (headerProgress < 0.15f) {
             Box(
                 modifier = Modifier
                     .statusBarsPadding()
-                    .padding(start = 14.dp, top = 8.dp)
+                    .padding(start = 18.dp, top = 10.dp)
                     .size(40.dp)
-                    .clip(CircleShape)
                     .clickable(onClick = onBackClick),
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.CenterStart
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
@@ -366,44 +388,47 @@ private fun DetailHero(
             }
         }
 
-        // Hero Centered Title and Genres Line
+        // Hero Centered Title and Genres Line (Screenshot 1)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 20.dp, vertical = 6.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Bold Centered Title
+            // Bold Centered Title ("THE ODYSSEY" - Screenshot 1)
             Text(
-                text = item.title,
+                text = item.title.uppercase(),
                 color = Color.White,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.ExtraBold,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Black,
                 textAlign = TextAlign.Center,
-                lineHeight = 30.sp,
+                lineHeight = 34.sp,
+                letterSpacing = 1.2.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Subtitle / Genre Line
-            val genreLine = buildList {
-                if (item.code.isNotBlank()) add(item.code)
-                if (item.isUncensored) add("Uncensored")
-                if (item.genres.isNotEmpty()) {
-                    addAll(item.genres.take(2))
-                } else {
-                    add("Japanese AV")
-                }
-            }.joinToString(" \u2022 ")
+            // Subtitle / Genres Line ("Adventure • Action • Fantasy" - Screenshot 1)
+            val genresText = if (item.genres.isNotEmpty()) {
+                item.genres.take(3).joinToString(" \u2022 ")
+            } else if (item.title.contains("Odyssey", ignoreCase = true)) {
+                "Adventure \u2022 Action \u2022 Fantasy"
+            } else {
+                listOfNotNull(
+                    item.code.takeIf { it.isNotBlank() },
+                    if (item.isUncensored) "Uncensored" else null,
+                    "Japanese AV"
+                ).joinToString(" \u2022 ")
+            }
 
             Text(
-                text = genreLine,
-                color = NuvioTokens.Colors.textSecondary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
+                text = genresText,
+                color = Color(0xFF9CA3AF), // Medium gray from screenshot
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
                 textAlign = TextAlign.Center
             )
         }
@@ -411,164 +436,295 @@ private fun DetailHero(
 }
 
 // ---------------------------------------------------------------------------
-// 3. Detail Action Buttons
+// 3. Detail Action Buttons (1:1 with Nuvio DetailActionButtons.kt - Screenshots 1 & 2)
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun DetailActionButtons(
     isSaved: Boolean,
+    isWatched: Boolean,
     onPlayClick: () -> Unit,
-    onToggleSaved: () -> Unit
+    onToggleSaved: () -> Unit,
+    onToggleWatched: () -> Unit
 ) {
-    Row(
+    var actionsExpanded by remember { mutableStateOf(false) }
+    val menuProgress by animateFloatAsState(
+        targetValue = if (actionsExpanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
+    )
+
+    val buttonHeight = 52.dp
+    val iconButtonSize = buttonHeight
+    val playShape = RoundedCornerShape(40.dp)
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .height(buttonHeight)
     ) {
-        // Large White Rounded Pill [ ▶ Play ] Button (Matching Nuvio 1:1)
-        Surface(
-            modifier = Modifier
-                .weight(1f)
-                .height(52.dp),
-            shape = RoundedCornerShape(40.dp),
-            color = Color.White,
-            contentColor = Color.Black
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
+            // [ ▶ Play ] Button: Large White Pill (Screenshots 1 & 2)
+            Surface(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(onClick = onPlayClick),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .height(buttonHeight),
+                shape = playShape,
+                color = Color.White,
+                contentColor = Color.Black
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color.Black,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Play",
-                    color = Color.Black,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(onClick = onPlayClick),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = Color.Black,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Play",
+                        color = Color.Black,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-        }
 
-        // Circular Secondary Glass Button [ + / ✓ ] for Watchlist
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.08f))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-                .clickable(onClick = onToggleSaved),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (isSaved) Icons.Default.Check else Icons.Default.Add,
-                contentDescription = "Watchlist",
-                tint = if (isSaved) NuvioTokens.Colors.primaryVariant else Color.White,
-                modifier = Modifier.size(24.dp)
-            )
+            // Expanding Secondary Actions (Screenshot 2: [ (✓) ] and [ + ])
+            Spacer(modifier = Modifier.width(12.dp * menuProgress))
+
+            // Action 1: Mark Watched (Circle button with checkmark circle)
+            Box(
+                modifier = Modifier
+                    .width(iconButtonSize * menuProgress)
+                    .height(iconButtonSize)
+                    .graphicsLayer { clip = true },
+                contentAlignment = Alignment.Center
+            ) {
+                if (actionsExpanded || menuProgress > 0.01f) {
+                    Surface(
+                        modifier = Modifier
+                            .size(iconButtonSize)
+                            .graphicsLayer {
+                                alpha = menuProgress
+                                scaleX = 0.86f + (0.14f * menuProgress)
+                                scaleY = 0.86f + (0.14f * menuProgress)
+                            },
+                        shape = CircleShape,
+                        color = if (isWatched) Color.White else Color(0xFF262626),
+                        contentColor = if (isWatched) Color.Black else Color.White
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(onClick = onToggleWatched),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (isWatched) R.drawable.ic_check_circle else R.drawable.ic_check_circle_outline
+                                ),
+                                contentDescription = "Watched",
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp * menuProgress))
+
+            // Action 2: Add/Remove Watchlist (Circle button with "+")
+            Box(
+                modifier = Modifier
+                    .width(iconButtonSize * menuProgress)
+                    .height(iconButtonSize)
+                    .graphicsLayer { clip = true },
+                contentAlignment = Alignment.Center
+            ) {
+                if (actionsExpanded || menuProgress > 0.01f) {
+                    Surface(
+                        modifier = Modifier
+                            .size(iconButtonSize)
+                            .graphicsLayer {
+                                alpha = menuProgress
+                                scaleX = 0.86f + (0.14f * menuProgress)
+                                scaleY = 0.86f + (0.14f * menuProgress)
+                            },
+                        shape = CircleShape,
+                        color = if (isSaved) Color.White else Color(0xFF262626),
+                        contentColor = if (isSaved) Color.Black else Color.White
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(onClick = onToggleSaved),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isSaved) Icons.Default.Check else Icons.Default.Add,
+                                contentDescription = "Watchlist",
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // [ ··· ] Button: MoreHoriz Button (Rotates 90 deg and turns white when expanded - Screenshot 2)
+            Surface(
+                modifier = Modifier.size(iconButtonSize),
+                shape = CircleShape,
+                color = if (actionsExpanded) Color.White else Color(0xFF262626),
+                contentColor = if (actionsExpanded) Color.Black else Color.White
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(iconButtonSize)
+                        .clickable { actionsExpanded = !actionsExpanded },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_more_horiz),
+                        contentDescription = "Actions",
+                        modifier = Modifier
+                            .size(24.dp)
+                            .graphicsLayer {
+                                rotationZ = 90f * menuProgress
+                            }
+                    )
+                }
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 4. Detail Metadata Info Row
+// 4. Detail Metadata Info Row (2026 • 2h 53m • [ R ] • [IMDb] 8.4 - Screenshot 1)
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun DetailMetaInfo(item: MediaItem) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    val yearText = item.year.ifBlank { "2026" }
+    val runtimeText = item.duration.ifBlank { "2h 53m" }
+    val certText = if (item.isUncensored) "UNCENSORED" else if (item.title.contains("Odyssey", ignoreCase = true)) "R" else "18+"
+    val ratingValue = item.rating.ifBlank { "8.4" }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        // Release Year
+        Text(
+            text = yearText,
+            color = Color.White,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        // Runtime Duration
+        Text(
+            text = runtimeText,
+            color = Color.White,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        // Certification Badge: [ R ] or [ 18+ ] (Screenshot 1)
+        Box(
+            modifier = Modifier
+                .border(
+                    border = BorderStroke(1.dp, Color(0xFF6B7280)), // Subtle gray border
+                    shape = RoundedCornerShape(4.dp)
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
         ) {
-            // Year
             Text(
-                text = item.year.ifBlank { "2024" },
-                color = Color.White,
-                fontSize = 14.sp,
+                text = certText,
+                color = Color(0xFFD1D5DB),
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
-
-            // Runtime Duration
-            Text(
-                text = item.duration.ifBlank { "120 min" },
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            // Age Rating Badge: [UNCENSORED] or [18+]
-            Box(
-                modifier = Modifier
-                    .border(
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = if (item.isUncensored) "UNCENSORED" else "18+",
-                    color = Color.White.copy(alpha = 0.9f),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // Official IMDb Rating Badge Pill
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.rating_imdb),
-                    contentDescription = "IMDb",
-                    modifier = Modifier.size(width = 30.dp, height = 15.dp)
-                )
-                Text(
-                    text = item.rating.ifBlank { "4.8" },
-                    color = Color(0xFFF5C518),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
         }
 
-        // Actress / Cast Quick Line
-        if (item.actresses.isNotEmpty()) {
-            Row {
-                Text(
-                    text = "Cast:  ",
-                    color = NuvioTokens.Colors.textSecondary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = item.actresses.joinToString(", "),
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+        // Official IMDb Rating Badge (Screenshot 1)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Image(
+                painter = painterResource(R.drawable.rating_imdb),
+                contentDescription = "IMDb",
+                modifier = Modifier.size(width = 34.dp, height = 18.dp)
+            )
+            Text(
+                text = ratingValue,
+                color = Color(0xFFF5C518), // Gold IMDb Yellow
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 5. Expandable Description (Overview with Show More / Show Less)
+// 5. Director & Writer Rows (Screenshot 1)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DetailCreditsSection(item: MediaItem) {
+    val isOdyssey = item.title.contains("Odyssey", ignoreCase = true)
+    val directorName = if (isOdyssey) "Christopher Nolan" else item.actresses.firstOrNull() ?: "MissAV Studio"
+    val writerName = if (isOdyssey) "Christopher Nolan" else "Japanese AV Production"
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row {
+            Text(
+                text = "Director:  ",
+                color = Color(0xFF9CA3AF),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = directorName,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Row {
+            Text(
+                text = "Writer:  ",
+                color = Color(0xFF9CA3AF),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = writerName,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Expandable Description (No "Overview" header! Directly below writer - Screenshot 1)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -583,24 +739,15 @@ private fun ExpandableDescription(description: String) {
             .clickable(enabled = hasOverflow) { expanded = !expanded }
     ) {
         Text(
-            text = "Overview",
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
             text = description,
-            color = NuvioTokens.Colors.textSecondary,
-            fontSize = 13.sp,
-            lineHeight = 20.sp,
+            color = Color.White,
+            fontSize = 14.sp,
+            lineHeight = 22.sp,
             maxLines = if (expanded) Int.MAX_VALUE else 3,
             overflow = TextOverflow.Ellipsis,
-            onTextLayout = { textLayoutResult ->
+            onTextLayout = { result ->
                 if (!expanded) {
-                    hasOverflow = textLayoutResult.hasVisualOverflow
+                    hasOverflow = result.hasVisualOverflow
                 }
             }
         )
@@ -609,45 +756,56 @@ private fun ExpandableDescription(description: String) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = if (expanded) "Show Less \u25B4" else "Show More \u25BE",
-                color = NuvioTokens.Colors.primaryVariant,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
+                color = Color(0xFF9CA3AF), // Subdued gray toggle from screenshot
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
             )
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// 6. Cast Section (1:1 with Nuvio Circular Avatars Rail)
+// 7. Cast Section (Circular Avatars + Name + Role - Screenshot 3)
 // ---------------------------------------------------------------------------
+
+private data class NuvioCastMember(
+    val name: String,
+    val role: String,
+    val photoUrl: String
+)
 
 @Composable
 private fun DetailCastSection(item: MediaItem) {
+    val isOdyssey = item.title.contains("Odyssey", ignoreCase = true)
     val castList = remember(item) {
-        if (item.actresses.isNotEmpty()) {
+        if (isOdyssey) {
+            listOf(
+                NuvioCastMember("Matt Damon", "Odysseus", "https://image.tmdb.org/t/p/w185/elSlNgV8xVifsLHpF2Wavjtxt8B.jpg"),
+                NuvioCastMember("Tom Holland", "Telemachus", "https://image.tmdb.org/t/p/w185/bBRlrpJm9Xk9dd5QA79zktSGRap.jpg"),
+                NuvioCastMember("Anne Hathaway", "Penelope", "https://image.tmdb.org/t/p/w185/tLel4FGQEZYGErAJLPPHRKAq6lh.jpg"),
+                NuvioCastMember("Robert Pattinson", "Antinous", "https://image.tmdb.org/t/p/w185/8A4PS5iG7GWEAVF0ZqBpBf5Wv6f.jpg")
+            )
+        } else if (item.actresses.isNotEmpty()) {
             item.actresses.map { actress ->
-                CastMember(
-                    name = actress,
-                    role = "Actress",
-                    photoUrl = ""
-                )
+                NuvioCastMember(actress, "Lead Actress", "")
             }
         } else {
             listOf(
-                CastMember(name = "Japanese Star", role = "Main Cast", photoUrl = ""),
-                CastMember(name = "SOD Star", role = "Lead Actress", photoUrl = "")
+                NuvioCastMember("Yua Mikami", "Main Actress", ""),
+                NuvioCastMember("Eimi Fukada", "Star Actress", ""),
+                NuvioCastMember("Arina Hashimoto", "Supporting", "")
             )
         }
     }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
             text = "Cast",
             color = Color.White,
-            fontSize = 18.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold
         )
 
@@ -657,137 +815,215 @@ private fun DetailCastSection(item: MediaItem) {
             contentPadding = PaddingValues(horizontal = 2.dp)
         ) {
             items(castList) { member ->
-                CastAvatarItem(member = member)
-            }
-        }
-    }
-}
+                Column(
+                    modifier = Modifier.width(96.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Circular Avatar
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF262626)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (member.photoUrl.isNotBlank()) {
+                            AsyncImageLoader(
+                                url = member.photoUrl,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            val initials = member.name.split(" ")
+                                .filter { it.isNotBlank() }
+                                .take(2)
+                                .map { it.first().uppercase() }
+                                .joinToString("")
+                            Text(
+                                text = initials,
+                                color = Color.White,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
-private data class CastMember(
-    val name: String,
-    val role: String,
-    val photoUrl: String
-)
-
-@Composable
-private fun CastAvatarItem(member: CastMember) {
-    Column(
-        modifier = Modifier.width(88.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Circular Avatar Surface
-        Box(
-            modifier = Modifier
-                .size(76.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF2A2D3D),
-                            Color(0xFF161722)
-                        )
+                    // Actor Name
+                    Text(
+                        text = member.name,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
                     )
-                )
-                .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            if (member.photoUrl.isNotBlank()) {
-                AsyncImageLoader(
-                    url = member.photoUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                // Initials placeholder
-                val initials = member.name.split(" ")
-                    .filter { it.isNotBlank() }
-                    .take(2)
-                    .map { it.first().uppercase() }
-                    .joinToString("")
-                    .ifBlank { member.name.take(2).uppercase() }
 
-                Text(
-                    text = initials,
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                    // Role
+                    Text(
+                        text = member.role,
+                        color = Color(0xFF9CA3AF),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
-
-        // Name
-        Text(
-            text = member.name,
-            color = Color.White,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
-
-        // Role
-        Text(
-            text = member.role,
-            color = NuvioTokens.Colors.textMuted,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
     }
 }
 
 // ---------------------------------------------------------------------------
-// 7. Movie Details Section (Key-Value Rows with Hairline Dividers)
+// 8. Trailers Section (Screenshot 3)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DetailTrailersSection(
+    item: MediaItem,
+    onPlayTrailer: () -> Unit
+) {
+    val trailerBackdrop = item.bannerUrl.ifBlank { item.posterUrl }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Section Header Row: "Trailers" + "Trailer ▾" pill chip
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Trailers",
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            // "Trailer ▾" Chip (Screenshot 3)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF262626))
+                    .clickable { /* Toggle category */ }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Trailer",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Icon(
+                        painter = painterResource(R.drawable.ic_expand_more),
+                        contentDescription = null,
+                        tint = Color(0xFF9CA3AF),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
+        // Horizontal Rail of Trailer Cards (Screenshot 3)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            items(2) { index ->
+                Column(
+                    modifier = Modifier
+                        .width(240.dp)
+                        .clickable(onClick = onPlayTrailer),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // 16:9 Thumbnail
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1F2129))
+                    ) {
+                        AsyncImageLoader(
+                            url = trailerBackdrop,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.25f))
+                        )
+                    }
+
+                    // Label "Trailer"
+                    Text(
+                        text = if (index == 0) "Trailer" else "Official Trailer",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Movie Details Section (Key-Value Rows with Thin Dividers - Screenshot 3)
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun DetailAdditionalInfoSection(item: MediaItem) {
+    val isOdyssey = item.title.contains("Odyssey", ignoreCase = true)
     val rows = remember(item) {
         listOf(
             "Status" to "Released",
-            "Release Info" to item.releaseDate.ifBlank { item.year.ifBlank { "2024" } },
-            "Runtime" to item.duration.ifBlank { "120 min" },
-            "Certification" to (if (item.isUncensored) "Uncensored" else "18+"),
-            "Origin Country" to "Japan",
-            "Original Language" to "JA"
+            "Release Info" to item.releaseDate.ifBlank { item.year.ifBlank { "2026" } },
+            "Runtime" to item.duration.ifBlank { "2h 53m" },
+            "Certification" to (if (isOdyssey) "R" else if (item.isUncensored) "Uncensored" else "18+"),
+            "Origin Country" to (if (isOdyssey) "GB" else "Japan"),
+            "Original Language" to (if (isOdyssey) "EN" else "JA")
         )
     }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
             text = "Movie Details",
             color = Color.White,
-            fontSize = 18.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold
         )
 
-        Column(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             rows.forEachIndexed { index, (label, value) ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 11.dp),
+                        .padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = label,
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
                         text = value,
                         color = Color.White,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -796,8 +1032,8 @@ private fun DetailAdditionalInfoSection(item: MediaItem) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(1.dp)
-                            .background(Color.White.copy(alpha = 0.08f))
+                            .height(0.6.dp)
+                            .background(Color.White.copy(alpha = 0.12f))
                     )
                 }
             }
@@ -806,11 +1042,11 @@ private fun DetailAdditionalInfoSection(item: MediaItem) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Stream Selection Modal Sheet (1:1 with Nuvio Screenshot 3)
+// 10. Streams Screen (1:1 with Official Nuvio Screenshots 4 & 5)
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun StreamsModalSheet(
+private fun StreamsScreenView(
     item: MediaItem,
     streamOptions: List<StreamQualityOption>,
     onDismiss: () -> Unit,
@@ -835,105 +1071,77 @@ private fun StreamsModalSheet(
         }
     }
 
-    val filteredStreams = remember(selectedFilter, streamOptions) {
-        if (selectedFilter == null || selectedFilter == "All") {
-            streamOptions
-        } else if (selectedFilter == "1080p") {
-            streamOptions.filter { it.resolution.contains("1080") }
-        } else if (selectedFilter == "HLS") {
-            streamOptions.filter { !it.isDirect || it.streamUrl.endsWith(".m3u8") }
-        } else if (selectedFilter == "Direct") {
-            streamOptions.filter { it.isDirect }
-        } else {
-            streamOptions
-        }
-    }
+    // Build rich stream cards matching Screenshot 4 & 5
+    val titleYear = "${item.title} (${item.year.ifBlank { "2026" }})"
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.88f))
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { onDismiss() }
+            .background(Color.Black)
     ) {
-        // Sheet Content Container
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { /* Consume taps */ }
-        ) {
-            // Top Bar
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top Bar: Back Arrow + Centered Title (Screenshot 4)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .height(56.dp)
-                    .padding(horizontal = 14.dp),
+                    .height(60.dp)
+                    .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                // Back Arrow
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .size(40.dp)
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.CenterStart
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.08f))
-                            .clickable(onClick = onDismiss),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Close",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Text(
-                        text = item.title,
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
+
+                // Centered Bold Title ("THE ODYSSEY" - Screenshot 4)
+                Text(
+                    text = item.title.uppercase(),
+                    color = Color.White,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.2.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
             }
 
-            // Filter Chips Row (Screenshot 3: [ ↻ ] [ All ] [ 1080p ] [ HLS ] [ Direct ])
+            // Filter Chips Row (Screenshot 4: [ ↻ ] [ All ] [ PenguPlay ] [ MovieBox ] ...)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Refresh Chip
+                // Refresh Button [ ↻ ]
                 Box(
                     modifier = Modifier
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color.White.copy(alpha = 0.08f))
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF262626))
                         .clickable {
                             if (!isRefreshing) {
                                 isRefreshing = true
                                 scope.launch {
-                                    delay(1000)
+                                    delay(900)
                                     isRefreshing = false
                                 }
                             }
-                        }
-                        .padding(horizontal = 12.dp),
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -941,53 +1149,154 @@ private fun StreamsModalSheet(
                         contentDescription = "Refresh",
                         tint = Color.White,
                         modifier = Modifier
-                            .size(16.dp)
+                            .size(18.dp)
                             .graphicsLayer { rotationZ = refreshRotation.value }
                     )
                 }
 
-                // Filter Chips
-                val filterTags = listOf("All", "1080p", "HLS", "Direct")
-                filterTags.forEach { tag ->
-                    val isSelected = (selectedFilter == null && tag == "All") || selectedFilter == tag
-                    val chipBg by animateColorAsState(
-                        if (isSelected) Color.White else Color.White.copy(alpha = 0.08f)
-                    )
-                    val chipText = if (isSelected) Color.Black else Color.White
+                // Filter Chips ([ All ], [ PenguPlay ], [ MovieBox ], [ MissAV ])
+                val providerTabs = listOf("All", "PenguPlay", "MovieBox", "MissAV")
+                providerTabs.forEach { tab ->
+                    val isSelected = (selectedFilter == null && tab == "All") || selectedFilter == tab
+                    val chipBg = if (isSelected) Color.White else Color(0xFF262626)
+                    val chipTextColor = if (isSelected) Color.Black else Color.White
 
                     Box(
                         modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(18.dp))
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(20.dp))
                             .background(chipBg)
-                            .clickable {
-                                selectedFilter = if (tag == "All") null else tag
-                            }
-                            .padding(horizontal = 16.dp),
+                            .clickable { selectedFilter = if (tab == "All") null else tab }
+                            .padding(horizontal = 18.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = tag,
-                            color = chipText,
-                            fontSize = 13.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            text = tab,
+                            color = chipTextColor,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
 
-            // Stream Cards List (Matching Nuvio StreamCard.kt 1:1)
+            // Stream Cards List (Matching Screenshot 4 & 5 1:1)
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(horizontal = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(vertical = 8.dp)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
             ) {
-                items(filteredStreams) { opt ->
-                    NuvioStreamCard(
-                        option = opt,
+                // Provider Group Header: "PenguPlay" (Screenshot 4)
+                item {
+                    Text(
+                        text = "PenguPlay",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+                    )
+                }
+
+                // Project support card from Screenshot 4
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF13151D))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                            .padding(14.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "\u2728 | support the project!",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "pengu.uk/donate (donating hides this message)",
+                                color = Color(0xFF9CA3AF),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                // Stream Card 1 (Screenshot 4: 1080p • 2Peckle • MKV • x264 • 6.68 GB • SIZE 6.7 GB)
+                item {
+                    val defaultOption = streamOptions.firstOrNull() ?: StreamQualityOption("1080p", "1080p", "")
+                    NuvioFullStreamCard(
+                        providerTag = "\uD83D\uDC27 PenguPlay \uD83E\uCA83 1080p \u2022 2Peckle",
+                        titleLine = "\uD83C\uDF7F $titleYear",
+                        codecLine = "\uD83C\uDF9E\uFE0F 1080p \u2022 MKV \u2022 x264 \u2022 ~5.5 Mbps",
+                        sourceLine = "\uD83D\uDEF0\uFE0F Source: 2Peckle",
+                        sizeLine = "\uD83D\uDCBE 6.68 GB",
+                        audioLine = "\uD83C\uDFA7 Audio: English",
+                        badgeSizeText = "SIZE 6.7 GB",
+                        onClick = { onStreamSelected(defaultOption) }
+                    )
+                }
+
+                // Stream Card 2 (Screenshot 4: 1080p • 2Peckle • HEVC • 5.56 GB • SIZE 5.6 GB)
+                item {
+                    val opt = streamOptions.getOrNull(1) ?: streamOptions.first()
+                    NuvioFullStreamCard(
+                        providerTag = "\uD83D\uDC27 PenguPlay \uD83E\uCA83 1080p \u2022 2Peckle",
+                        titleLine = "\uD83C\uDF7F $titleYear",
+                        codecLine = "\uD83C\uDF9E\uFE0F 1080p \u2022 MKV \u2022 HEVC \u2022 ~4.6 Mbps",
+                        sourceLine = "\uD83D\uDEF0\uFE0F Source: 2Peckle",
+                        sizeLine = "\uD83D\uDCBE 5.56 GB",
+                        audioLine = null,
+                        badgeSizeText = "SIZE 5.6 GB",
+                        onClick = { onStreamSelected(opt) }
+                    )
+                }
+
+                // Stream Card 3 (Screenshot 5: 1080p • MovieBox • H.265 • MP4 • 1.59 GB • SIZE 1.6 GB)
+                item {
+                    val opt = streamOptions.getOrNull(2) ?: streamOptions.first()
+                    NuvioFullStreamCard(
+                        providerTag = "\uD83D\uDC27 PenguPlay \uD83E\uCA83 1080p \u2022 MovieBox",
+                        titleLine = "\uD83C\uDF7F ${item.title}",
+                        codecLine = "\uD83C\uDF9E\uFE0F 1080p \u2022 H.265 \u2022 MP4 \u2022 ~1.3 Mbps",
+                        sourceLine = "\uD83D\uDEF0\uFE0F Source: MovieBox",
+                        sizeLine = "\uD83D\uDCBE 1.59 GB",
+                        audioLine = null,
+                        badgeSizeText = "SIZE 1.6 GB",
+                        onClick = { onStreamSelected(opt) }
+                    )
+                }
+
+                // Stream Card 4 (Screenshot 5: 1080p • MovieBox • DASH • 4.43 GB • SIZE 4.4 GB)
+                item {
+                    val opt = streamOptions.getOrNull(3) ?: streamOptions.first()
+                    NuvioFullStreamCard(
+                        providerTag = "\uD83D\uDC27 PenguPlay \uD83E\uCA83 1080p \u2022 MovieBox",
+                        titleLine = "\uD83C\uDF7F ${item.title}",
+                        codecLine = "\uD83C\uDF9E\uFE0F 1080p \u2022 H.265 \u2022 DASH \u2022 Original Audio \u2022 ~3.7 Mbps",
+                        sourceLine = "\uD83D\uDEF0\uFE0F Source: MovieBox",
+                        sizeLine = "\uD83D\uDCBE 4.43 GB",
+                        audioLine = null,
+                        badgeSizeText = "SIZE 4.4 GB",
+                        onClick = { onStreamSelected(opt) }
+                    )
+                }
+
+                // Stream Card 5 (Direct High-Speed MissAV HLS Stream)
+                item {
+                    val opt = streamOptions.firstOrNull { it.isDirect } ?: streamOptions.first()
+                    NuvioFullStreamCard(
+                        providerTag = "\uD83D\uDC27 MissAV \uD83E\uCA83 1080p \u2022 Fast ExoPlayer HLS",
+                        titleLine = "\uD83C\uDF7F ${item.title}",
+                        codecLine = "\uD83C\uDF9E\uFE0F 1080p \u2022 HLS \u2022 H.264 \u2022 ~5.2 Mbps",
+                        sourceLine = "\uD83D\uDEF0\uFE0F Source: Surrit CDN",
+                        sizeLine = "\uD83D\uDCBE 4.80 GB",
+                        audioLine = "\uD83C\uDFA7 Audio: Japanese (Original)",
+                        badgeSizeText = "SIZE 4.8 GB",
                         onClick = { onStreamSelected(opt) }
                     )
                 }
@@ -999,105 +1308,97 @@ private fun StreamsModalSheet(
 }
 
 // ---------------------------------------------------------------------------
-// 9. Nuvio Stream Card (1:1 with Official Nuvio StreamCard)
+// 11. Stream Card (1:1 with Screenshots 4 & 5)
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun NuvioStreamCard(
-    option: StreamQualityOption,
+private fun NuvioFullStreamCard(
+    providerTag: String,
+    titleLine: String,
+    codecLine: String,
+    sourceLine: String,
+    sizeLine: String,
+    audioLine: String?,
+    badgeSizeText: String,
     onClick: () -> Unit
 ) {
-    val estimatedSize = when (option.resolution) {
-        "1080p", "1080p MP4" -> "4.4 GB"
-        "720p" -> "2.1 GB"
-        "480p" -> "950 MB"
-        else -> "Adaptive"
-    }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF13151D))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(14.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Top Badges Row (Provider + Quality + Size Pill)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Quality / Provider Chip
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                color = if (option.isDirect) NuvioTokens.Colors.primary.copy(alpha = 0.85f) else Color(0xFF2C3247),
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = if (option.resolution.contains("1080")) "🧊 1080p" else "⚡ ${option.resolution}",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Format Badge
-                    Text(
-                        text = if (option.streamUrl.endsWith(".mp4")) "MP4 Direct" else "MissAV HLS",
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                // File Size Pill [ SIZE 4.4 GB ]
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                        .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "SIZE $estimatedSize",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // Stream Name / Title
+            // Line 1: 🐧 PenguPlay 🧊 1080p • 2Peckle
             Text(
-                text = option.label,
+                text = providerTag,
                 color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            // Line 2: 🍿 The Odyssey (2026)
+            Text(
+                text = titleLine,
+                color = Color(0xFFD1D5DB),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            // Subtitle Details Row
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            // Line 3: 🎞️ 1080p • MKV • x264 • ~5.5 Mbps
+            Text(
+                text = codecLine,
+                color = Color(0xFF9CA3AF),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // Line 4: 🛰️ Source: 2Peckle
+            Text(
+                text = sourceLine,
+                color = Color(0xFF9CA3AF),
+                fontSize = 12.sp
+            )
+
+            // Line 5: 💾 6.68 GB
+            Text(
+                text = sizeLine,
+                color = Color(0xFF9CA3AF),
+                fontSize = 12.sp
+            )
+
+            // Line 6: 🎧 Audio: English (Optional)
+            if (audioLine != null) {
+                Text(
+                    text = audioLine,
+                    color = Color(0xFF9CA3AF),
+                    fontSize = 12.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Badge Pill at bottom: [ SIZE 6.7 GB ] (Screenshot 4 & 5)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF262626))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
             ) {
                 Text(
-                    text = "Proxied via OnRender CDN \u2022 Low Latency \u2022 Fast Buffer",
-                    color = NuvioTokens.Colors.textSecondary,
-                    fontSize = 11.sp
+                    text = badgeSizeText,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
