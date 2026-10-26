@@ -18,12 +18,12 @@ logger = logging.getLogger("missav_scraper")
 logging.basicConfig(level=logging.INFO)
 
 MIRRORS = [
-    "https://missav.media",
-    "https://missav.fans",
+    "https://missav.ai",
     "https://missav.ws",
     "https://missav.live",
+    "https://missav.media",
+    "https://missav.fans",
     "https://missav123.com",
-    "https://missav.ai",
 ]
 
 HEADERS = {
@@ -263,7 +263,8 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
 
 
 def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
-    """Tries fetching multiple fallback URLs with quick 4s timeout per mirror."""
+    """Tries fetching multiple fallback URLs with session reuse and quick 4s timeout per mirror."""
+    sess = get_session()
     for url in urls:
         for attempt in range(retries_per_url):
             try:
@@ -272,13 +273,106 @@ def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
                 req_headers = dict(HEADERS)
                 req_headers["Referer"] = f"{origin}/"
                 req_headers["Origin"] = origin
-                r = requests.get(url, headers=req_headers, impersonate="chrome120", timeout=4)
+                r = sess.get(url, headers=req_headers, timeout=4)
                 if r.status_code == 200 and len(r.text) > 1000 and "Just a moment..." not in r.text:
                     return r.text
             except Exception as e:
                 logger.debug(f"Attempt failed for {url}: {e}")
-                time.sleep(0.1)
+                reset_session()
+                sess = get_session()
+                time.sleep(0.05)
     return ""
+
+
+SORT_TAG_MAP = {
+    "t": "today_views",
+    "today": "today_views",
+    "today_views": "today_views",
+    "m": "monthly_views",
+    "month": "monthly_views",
+    "monthly": "monthly_views",
+    "monthly_views": "monthly_views",
+    "w": "weekly_views",
+    "week": "weekly_views",
+    "weekly": "weekly_views",
+    "weekly_views": "weekly_views",
+    "r": "released_at",
+    "rel": "released_at",
+    "release": "released_at",
+    "released": "released_at",
+    "released_at": "released_at",
+    "new": "published_at",
+    "recent": "published_at",
+    "published": "published_at",
+    "published_at": "published_at",
+    "v": "views",
+    "view": "views",
+    "views": "views",
+    "total": "views",
+}
+
+
+def parse_search_query_modifiers(raw_query: str) -> Tuple[str, str, int]:
+    """
+    Parses human search queries for sort flags and batch numbers.
+    E.g.:
+      'Yua Mikami' -> ('Yua Mikami', 'views', 1)
+      'Yua Mikami 2' -> ('Yua Mikami', 'views', 2)
+      'Yua Mikami t' -> ('Yua Mikami', 'today_views', 1)
+      'Yua Mikami t 2' -> ('Yua Mikami', 'today_views', 2)
+      'Yua Mikami m' -> ('Yua Mikami', 'monthly_views', 1)
+      'SSIS-062' -> ('SSIS-062', 'views', 1)
+    """
+    q = (raw_query or "").strip()
+    if not q:
+        return "", "views", 1
+
+    # Check if the entire query looks like a standard JAV video code with 3+ digits (e.g. SSIS-062, IPX 123, FC2-PPV-1234567)
+    if re.match(r"^[A-Za-z]{2,8}[-_ ]?\d{3,7}$", q, re.IGNORECASE):
+        return q, "views", 1
+
+    tokens = q.split()
+    if not tokens:
+        return "", "views", 1
+
+    sort_found = None
+    batch_found = 1
+    consumed_indices = set()
+
+    # Inspect up to the last two tokens for modifiers (e.g. 'Yua Mikami t 2' or 'Yua Mikami 2' or 'Yua Mikami m')
+    for idx in range(len(tokens) - 1, max(-1, len(tokens) - 3), -1):
+        tok = tokens[idx].lower().strip()
+
+        # Check for explicit page syntax: p2, page2, page:2, #2
+        p_match = re.match(r"^(?:p|page:?|#)(\d+)$", tok)
+        if p_match and batch_found == 1:
+            batch_found = max(1, int(p_match.group(1)))
+            consumed_indices.add(idx)
+            continue
+
+        # Check for single digit batch (1-9)
+        if tok.isdigit() and len(tok) == 1 and batch_found == 1:
+            batch_found = max(1, int(tok))
+            consumed_indices.add(idx)
+            continue
+
+        # Check for sort tag
+        clean_tag = tok.lstrip("#").lstrip(":")
+        if clean_tag in SORT_TAG_MAP and sort_found is None:
+            sort_found = SORT_TAG_MAP[clean_tag]
+            consumed_indices.add(idx)
+            continue
+
+    remaining_tokens = [t for i, t in enumerate(tokens) if i not in consumed_indices]
+    clean_query = " ".join(remaining_tokens).strip()
+
+    if not clean_query:
+        clean_query = q
+        sort_found = "views"
+        batch_found = 1
+
+    final_sort = sort_found if sort_found else "views"
+    return clean_query, final_sort, batch_found
 
 
 SORT_MAP = {
@@ -357,22 +451,17 @@ def fetch_catalog(category: str, page: int = 1, sort: Optional[str] = None) -> L
     return []
 
 
-def search_videos(query: str, page: int = 1, sort: str = "views") -> List[Dict]:
+def _fetch_search_page_with_session(
+    sess: requests.Session,
+    clean_query: str,
+    page: int = 1,
+    norm_sort: str = "views",
+    preferred_endpoint: str = "search",
+) -> Tuple[List[Dict], str]:
     """
-    Searches MissAV for titles or actress names matching query with automatic mirror and actress fallback.
-    Supports sort filters: views, monthly_views, weekly_views, today_views, saved, published_at, released_at.
+    Fetches a single search page reusing the session with fast mirror fallback.
+    Returns (items, endpoint_used).
     """
-    clean_query = urllib.parse.unquote(query.strip())
-    if not clean_query:
-        return []
-
-    norm_sort = SORT_MAP.get(sort.lower().replace("-", "_").replace(" ", "_"), "views") if sort else "views"
-
-    cache_key = f"search:{clean_query.lower()}:{norm_sort}:{page}"
-    cached = _get_cache(cache_key)
-    if cached:
-        return cached
-
     params = []
     if norm_sort:
         params.append(f"sort={norm_sort}")
@@ -381,29 +470,116 @@ def search_videos(query: str, page: int = 1, sort: str = "views") -> List[Dict]:
     query_str = ("?" + "&".join(params)) if params else ""
     encoded_query = urllib.parse.quote(clean_query)
 
-    # 1. Primary search endpoint
-    urls = [
-        f"{m}/en/search/{encoded_query}{query_str}" for m in MIRRORS
-    ]
+    endpoints_to_try = [preferred_endpoint]
+    if preferred_endpoint == "search":
+        endpoints_to_try.append("actresses")
+    else:
+        endpoints_to_try.append("search")
 
-    html_content = fetch_with_fallback(urls)
-    items = parse_video_cards(html_content) if html_content else []
+    for ep in endpoints_to_try:
+        urls = [f"{m}/en/{ep}/{encoded_query}{query_str}" for m in MIRRORS]
+        for url in urls:
+            try:
+                parsed = urllib.parse.urlparse(url)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                req_headers = dict(HEADERS)
+                req_headers["Referer"] = f"{origin}/"
+                req_headers["Origin"] = origin
+                r = sess.get(url, headers=req_headers, timeout=4)
+                if r.status_code == 200 and len(r.text) > 1000 and "Just a moment..." not in r.text:
+                    items = parse_video_cards(r.text)
+                    if items or page > 1:
+                        return items, ep
+            except Exception as e:
+                logger.debug(f"Search fetch failed for {url}: {e}")
+                time.sleep(0.05)
 
-    # 2. If search returns 0 items, fallback to /actresses/ endpoint
-    if not items:
-        actress_urls = [
-            f"{m}/en/actresses/{encoded_query}{query_str}" for m in MIRRORS
-        ]
-        actress_html = fetch_with_fallback(actress_urls)
-        if actress_html:
-            items = parse_video_cards(actress_html)
+    return [], preferred_endpoint
 
-    # 3. If still empty on page 1, check if query matches a direct video slug (e.g. nhdtb-213)
-    if not items and page == 1:
-        single_slug = encoded_query.lower()
+
+def search_videos(
+    query: str,
+    page: int = 1,
+    sort: str = "views",
+    batch: int = 1,
+    batch_mode: bool = True,
+    batch_size: int = 5,
+) -> List[Dict]:
+    """
+    Searches MissAV for titles or actress names matching query with automatic mirror and actress fallback.
+    If batch_mode=True, retrieves up to `batch_size` pages (default 5 = ~60 items) in one response,
+    allowing smooth deep-scrolling in official Nuvio.
+    Supports sort filters: views, monthly_views, weekly_views, today_views, saved, published_at, released_at.
+    """
+    clean_query = urllib.parse.unquote(query.strip())
+    if not clean_query:
+        return []
+
+    norm_sort = SORT_MAP.get(sort.lower().replace("-", "_").replace(" ", "_"), "views") if sort else "views"
+
+    # Single-page mode (for skip offset or manual single-page calls)
+    if not batch_mode:
+        cache_key = f"search:{clean_query.lower()}:{norm_sort}:{page}"
+        cached = _get_cache(cache_key)
+        if cached:
+            return cached
+
+        sess = get_session()
+        items, _ = _fetch_search_page_with_session(sess, clean_query, page=page, norm_sort=norm_sort)
+        if not items and page == 1:
+            single_slug = urllib.parse.quote(clean_query).lower()
+            single_info = get_video_stream_info(single_slug)
+            if single_info:
+                items = [{
+                    "id": f"missav:{single_info['slug']}",
+                    "slug": single_info["slug"],
+                    "name": single_info["title"],
+                    "poster": single_info["poster"],
+                    "thumbnail": single_info["poster"],
+                    "type": "movie",
+                    "description": f"MissAV Video: {single_info['title']}",
+                }]
+        if items:
+            _set_cache(cache_key, items)
+            return items
+        return []
+
+    # Multi-page Batch mode (default for Nuvio search)
+    batch_cache_key = f"search_batch:{clean_query.lower()}:{norm_sort}:{batch}:{batch_size}"
+    cached_batch = _get_cache(batch_cache_key)
+    if cached_batch:
+        return cached_batch
+
+    start_page = (batch - 1) * batch_size + 1
+    end_page = start_page + batch_size
+
+    all_items = []
+    seen_ids = set()
+    endpoint_type = "search"
+
+    sess = get_session()
+    for p in range(start_page, end_page):
+        p_items, detected_endpoint = _fetch_search_page_with_session(
+            sess, clean_query, page=p, norm_sort=norm_sort, preferred_endpoint=endpoint_type
+        )
+        if detected_endpoint:
+            endpoint_type = detected_endpoint
+
+        for it in p_items:
+            if it["id"] not in seen_ids:
+                seen_ids.add(it["id"])
+                all_items.append(it)
+
+        # If a page returns fewer than 12 cards, no more pages exist
+        if len(p_items) < 12:
+            break
+
+    # If still empty on batch 1, check direct video slug (e.g. nhdtb-213)
+    if not all_items and batch == 1:
+        single_slug = urllib.parse.quote(clean_query).lower()
         single_info = get_video_stream_info(single_slug)
         if single_info:
-            items = [{
+            all_items = [{
                 "id": f"missav:{single_info['slug']}",
                 "slug": single_info["slug"],
                 "name": single_info["title"],
@@ -413,11 +589,11 @@ def search_videos(query: str, page: int = 1, sort: str = "views") -> List[Dict]:
                 "description": f"MissAV Video: {single_info['title']}",
             }]
 
-    if items:
-        _set_cache(cache_key, items)
-        return items
+    if all_items:
+        _set_cache(batch_cache_key, all_items)
+        return all_items
 
-    logger.warning(f"No results found for search query: {query} (sort: {norm_sort})")
+    logger.warning(f"No results found for search query: {query} (sort: {norm_sort}, batch: {batch})")
     return []
 
 

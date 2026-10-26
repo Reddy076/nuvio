@@ -331,9 +331,15 @@ def parse_extra_params(extra_str: str) -> dict:
 
 
 @app.get("/search")
-def direct_search(q: str = "", sort: str = "views", page: int = 1):
-    """Direct search endpoint with sorting support for Nuvio and external clients."""
-    items = scraper.search_videos(q, page=page, sort=sort)
+def direct_search(q: str = "", sort: str = "", page: int = 1, batch: Optional[int] = None):
+    """
+    Direct search endpoint with sorting and batch support for Nuvio and external clients.
+    Automatically parses query modifiers (e.g. 'Yua Mikami t', 'Yua Mikami 2').
+    """
+    clean_query, detected_sort, detected_batch = scraper.parse_search_query_modifiers(q)
+    final_sort = sort if sort else detected_sort
+    final_batch = batch if batch is not None else detected_batch
+    items = scraper.search_videos(clean_query, batch=final_batch, sort=final_sort, batch_mode=True)
     return JSONResponse({"metas": items})
 
 
@@ -342,6 +348,7 @@ def get_catalog(type: str, id: str, request: Request):
     """
     Returns catalogs or search results for Nuvio.
     Supports ?search=query, /search=query.json, sort=option, and skip=number.
+    Automatically parses sort modifiers (e.g. 'query t', 'query m') and batch numbers ('query 2').
     """
     raw_path = urllib.parse.unquote(id)
     # id could be "missav_uncensored", "missav_uncensored/search=foo.json", "missav_uncensored/sort=monthly_views.json", etc.
@@ -360,11 +367,16 @@ def get_catalog(type: str, id: str, request: Request):
     except ValueError:
         skip = 0
 
-    page = 1 + (skip // 12)
-
     if search_query:
-        items = scraper.search_videos(search_query, page=page, sort=sort_val or "views")
+        clean_query, detected_sort, detected_batch = scraper.parse_search_query_modifiers(search_query)
+        final_sort = sort_val if sort_val else detected_sort
+        if skip > 0:
+            page = 1 + (skip // 12)
+            items = scraper.search_videos(clean_query, page=page, sort=final_sort, batch_mode=False)
+        else:
+            items = scraper.search_videos(clean_query, batch=detected_batch, sort=final_sort, batch_mode=True)
     else:
+        page = 1 + (skip // 12)
         items = scraper.fetch_catalog(catalog_id, page=page, sort=sort_val)
 
     if type == "series":
@@ -677,6 +689,14 @@ def proxy_download(uuid: str, path: str, request: Request):
     Enables Nuvio's internal download manager and external downloaders (1DM, ADM, browser)
     to download full offline movies directly.
     """
+    headers = {
+        "User-Agent": scraper.HEADERS["User-Agent"],
+        "Referer": "https://missav.ws/",
+        "Origin": "https://missav.ws",
+        "Accept": "*/*",
+    }
+    sess = scraper.get_session()
+
     # Build candidate paths: requested path, variants, and standard fallbacks
     candidate_paths = []
     if path.endswith(".m3u8"):
@@ -710,6 +730,7 @@ def proxy_download(uuid: str, path: str, request: Request):
             candidate_paths.append(v["path"])
 
     chosen_dir = "720p"
+    segment_names = []
     # Find the first candidate path with accessible video.m3u8
     for cand_path in candidate_paths:
         for domain in ["surrit.com", "surrit.mrstcdn.store"]:

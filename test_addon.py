@@ -120,9 +120,9 @@ def test_stream_and_proxy():
     assert len(data["streams"]) > 0
     print(f"  PASSED: Stream endpoint returned {len(data['streams'])} streams.")
 
-    # Find the proxied playlist URL
-    proxied_stream = next((s for s in data["streams"] if "/proxy/m3u8/" in s["url"]), None)
-    assert proxied_stream is not None, "No proxied stream found!"
+    # Find the proxied variant playlist URL (video.m3u8)
+    proxied_stream = next((s for s in data["streams"] if "/proxy/m3u8/" in s["url"] and "video.m3u8" in s["url"]), None)
+    assert proxied_stream is not None, "No proxied direct variant stream found!"
     stream_url = proxied_stream["url"]
     path_and_query = stream_url.replace(BASE_URL, "")
 
@@ -209,15 +209,67 @@ def test_non_1080p_video():
         print("  PASSED: 1080p download smoothly fell back to 720p MP4.")
 
 
+def test_query_parser():
+    print("Testing parse_search_query_modifiers...")
+    import scraper
+    cases = [
+        ("Yua Mikami", "Yua Mikami", "views", 1),
+        ("Yua Mikami 2", "Yua Mikami", "views", 2),
+        ("Yua Mikami p3", "Yua Mikami", "views", 3),
+        ("Yua Mikami t", "Yua Mikami", "today_views", 1),
+        ("Yua Mikami t 2", "Yua Mikami", "today_views", 2),
+        ("Yua Mikami 2 t", "Yua Mikami", "today_views", 2),
+        ("Yua Mikami m", "Yua Mikami", "monthly_views", 1),
+        ("Yua Mikami m 2", "Yua Mikami", "monthly_views", 2),
+        ("Yua Mikami w", "Yua Mikami", "weekly_views", 1),
+        ("Yua Mikami r", "Yua Mikami", "released_at", 1),
+        ("SSIS-062", "SSIS-062", "views", 1),
+        ("SSIS 062", "SSIS 062", "views", 1),
+        ("SSIS 2", "SSIS", "views", 2),
+    ]
+    for raw, exp_q, exp_s, exp_b in cases:
+        cq, cs, cb = scraper.parse_search_query_modifiers(raw)
+        assert cq == exp_q, f"For {raw}: expected query {exp_q}, got {cq}"
+        assert cs == exp_s, f"For {raw}: expected sort {exp_s}, got {cs}"
+        assert cb == exp_b, f"For {raw}: expected batch {exp_b}, got {cb}"
+    print("  PASSED: Query modifier parser accurately parsed all test cases without code collision.")
+
+
+def test_search_modifiers_api():
+    print("Testing search modifier queries through API...")
+    # Today's views via search suffix
+    status_t, _, body_t = fetch("/catalog/movie/missav_uncensored/search=Yua%20Mikami%20t.json")
+    assert status_t == 200
+    data_t = json.loads(body_t.decode())
+    assert len(data_t.get("metas", [])) > 0
+    print(f"  PASSED: 'Yua Mikami t' returned {len(data_t['metas'])} today-views items.")
+
+    # Batch 2 via search suffix
+    status_b2, _, body_b2 = fetch("/catalog/movie/missav_uncensored/search=Yua%20Mikami%202.json")
+    assert status_b2 == 200
+    data_b2 = json.loads(body_b2.decode())
+    assert len(data_b2.get("metas", [])) > 0
+    print(f"  PASSED: 'Yua Mikami 2' returned {len(data_b2['metas'])} batch 2 items.")
+
+    # Direct search endpoint with monthly modifier
+    status_m, _, body_m = fetch("/search?q=Yua%20Mikami%20m")
+    assert status_m == 200
+    data_m = json.loads(body_m.decode())
+    assert len(data_m.get("metas", [])) > 0
+    print(f"  PASSED: Direct search '/search?q=Yua Mikami m' returned {len(data_m['metas'])} items.")
+
+
 if __name__ == "__main__":
     t = threading.Thread(target=run_server, daemon=True)
     t.start()
     time.sleep(1.5)  # Wait for server to boot
 
     print("=== Running MissAV Nuvio Addon Test Suite ===")
+    test_query_parser()
     test_manifest()
     test_catalog()
     test_search()
+    test_search_modifiers_api()
     test_meta()
     test_stream_and_proxy()
     test_non_1080p_video()
