@@ -1,11 +1,7 @@
 package com.red.app.data
 
 import android.content.Context
-import com.red.app.model.AddonSource
-import com.red.app.model.CatalogSection
-import com.red.app.model.ContinueWatchingItem
-import com.red.app.model.MediaItem
-import com.red.app.model.StreamQualityOption
+import com.red.app.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -613,5 +609,314 @@ object MissAvRepository {
         catalogMap["missav_release"] = allVideosMap.values.take(8).toMutableList()
         catalogMap["missav_new"] = allVideosMap.values.reversed().take(8).toMutableList()
         catalogMap["missav_chinese"] = allVideosMap.values.filter { it.slug().contains("chinese") || !it.isUncensored }.toMutableList()
+    }
+
+    suspend fun fetchMetaDetails(type: String, id: String): MetaDetails = withContext(Dispatchers.IO) {
+        val cleanSlug = id.replace("missav:", "").trim()
+        val local = allVideosMap[cleanSlug]
+        val cleanType = type.lowercase().ifBlank { "movie" }
+
+        try {
+            val url = URL("$addonBaseUrl/meta/$cleanType/$id.json")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 4000
+            conn.readTimeout = 5000
+            conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+            if (conn.responseCode == 200) {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(body)
+                val meta = root.optJSONObject("meta")
+                if (meta != null) {
+                    val genresList = mutableListOf<String>()
+                    val genArr = meta.optJSONArray("genres")
+                    if (genArr != null) {
+                        for (i in 0 until genArr.length()) genresList.add(genArr.getString(i))
+                    }
+                    if (genresList.isEmpty() && local != null) {
+                        genresList.addAll(local.genres)
+                    }
+
+                    val directorsList = mutableListOf<String>()
+                    val dirArr = meta.optJSONArray("director")
+                    if (dirArr != null) {
+                        for (i in 0 until dirArr.length()) directorsList.add(dirArr.getString(i))
+                    } else if (meta.optString("director").isNotBlank()) {
+                        directorsList.add(meta.optString("director"))
+                    }
+
+                    val writersList = mutableListOf<String>()
+                    val wrArr = meta.optJSONArray("writer")
+                    if (wrArr != null) {
+                        for (i in 0 until wrArr.length()) writersList.add(wrArr.getString(i))
+                    } else if (meta.optString("writer").isNotBlank()) {
+                        writersList.add(meta.optString("writer"))
+                    }
+
+                    val castList = mutableListOf<MetaPerson>()
+                    val castArr = meta.optJSONArray("cast")
+                    if (castArr != null) {
+                        for (i in 0 until castArr.length()) {
+                            val cObj = castArr.optJSONObject(i)
+                            if (cObj != null) {
+                                castList.add(
+                                    MetaPerson(
+                                        name = cObj.optString("name", "Cast"),
+                                        role = cObj.optString("role", "Cast"),
+                                        photo = cObj.optString("photo").takeIf { it.isNotBlank() }
+                                    )
+                                )
+                            } else {
+                                val cName = castArr.getString(i)
+                                castList.add(MetaPerson(name = cName, role = "Cast"))
+                            }
+                        }
+                    } else if (local != null && local.actresses.isNotEmpty()) {
+                        for (act in local.actresses) {
+                            castList.add(MetaPerson(name = act, role = "Cast"))
+                        }
+                    }
+
+                    val trailersList = mutableListOf<MetaTrailer>()
+                    val trArr = meta.optJSONArray("trailers")
+                    if (trArr != null) {
+                        for (i in 0 until trArr.length()) {
+                            val tObj = trArr.optJSONObject(i)
+                            if (tObj != null) {
+                                trailersList.add(
+                                    MetaTrailer(
+                                        id = tObj.optString("id", "trailer_$i"),
+                                        name = tObj.optString("name", "Trailer"),
+                                        key = tObj.optString("key", ""),
+                                        site = tObj.optString("site", "YouTube"),
+                                        type = tObj.optString("type", "Trailer")
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    return@withContext MetaDetails(
+                        id = meta.optString("id", id),
+                        type = meta.optString("type", cleanType),
+                        name = meta.optString("name", local?.title ?: id),
+                        poster = meta.optString("poster").takeIf { it.isNotBlank() } ?: local?.posterUrl,
+                        background = meta.optString("background").takeIf { it.isNotBlank() } ?: local?.bannerUrl ?: local?.posterUrl,
+                        logo = meta.optString("logo").takeIf { it.isNotBlank() },
+                        description = meta.optString("description").takeIf { it.isNotBlank() } ?: local?.description,
+                        releaseInfo = meta.optString("releaseInfo").takeIf { it.isNotBlank() } ?: local?.year ?: "2024",
+                        status = meta.optString("status").takeIf { it.isNotBlank() },
+                        imdbRating = meta.optString("imdbRating").takeIf { it.isNotBlank() } ?: local?.rating ?: "4.8",
+                        ageRating = meta.optString("ageRating").takeIf { it.isNotBlank() } ?: if (local?.isUncensored == true) "18+" else "PG-13",
+                        runtime = meta.optString("runtime").takeIf { it.isNotBlank() } ?: local?.duration ?: "120 min",
+                        genres = genresList,
+                        director = directorsList,
+                        writer = writersList,
+                        cast = castList,
+                        country = meta.optString("country").takeIf { it.isNotBlank() },
+                        language = meta.optString("language").takeIf { it.isNotBlank() },
+                        trailers = trailersList
+                    )
+                }
+            }
+        } catch (ignored: Throwable) {}
+
+        // Fallback to local item if network fails or meta is empty
+        val fallbackCast = local?.actresses?.map { MetaPerson(name = it, role = "Cast") } ?: emptyList()
+        MetaDetails(
+            id = id,
+            type = cleanType,
+            name = local?.title ?: id,
+            poster = local?.posterUrl,
+            background = local?.bannerUrl ?: local?.posterUrl,
+            description = local?.description ?: "Official video details for ${local?.title ?: id}",
+            releaseInfo = local?.year ?: "2024",
+            status = "Released",
+            imdbRating = local?.rating ?: "4.8",
+            ageRating = if (local?.isUncensored == true) "18+" else "PG-13",
+            runtime = local?.duration ?: "120 min",
+            genres = local?.genres ?: listOf(local?.genre ?: "Movie"),
+            director = emptyList(),
+            writer = emptyList(),
+            cast = fallbackCast,
+            country = "JP",
+            language = "JA",
+            trailers = emptyList()
+        )
+    }
+
+    suspend fun fetchStreams(type: String, id: String, item: MediaItem?): List<AddonStreamGroup> = withContext(Dispatchers.IO) {
+        val cleanType = type.lowercase().ifBlank { "movie" }
+        val streamGroups = mutableListOf<AddonStreamGroup>()
+
+        // 1. Fetch from main addon server
+        val mainStreams = mutableListOf<StreamItem>()
+        try {
+            val url = URL("$addonBaseUrl/stream/$cleanType/$id.json")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 4000
+            conn.readTimeout = 6000
+            conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+            if (conn.responseCode == 200) {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(body)
+                val arr = root.optJSONArray("streams")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val sObj = arr.getJSONObject(i)
+                        val name = sObj.optString("name", "MissAV [Proxied]")
+                        val title = sObj.optString("title", "")
+                        val sUrl = sObj.optString("url", "")
+                        if (sUrl.isNotBlank()) {
+                            val bh = sObj.optJSONObject("behaviorHints")
+                            val sizeBytes = bh?.optLong("videoSize")?.takeIf { it > 0 }
+                            val res = parseResolution(name, title)
+                            val sizeStr = sizeBytes?.let { formatBytes(it) } ?: parseSizeText(title)
+                            val isDirect = sUrl.endsWith(".mp4") || sUrl.contains("/download/") || sUrl.contains("/1080p/")
+
+                            mainStreams.add(
+                                StreamItem(
+                                    name = name,
+                                    title = title,
+                                    description = sObj.optString("description", title),
+                                    url = sUrl,
+                                    addonName = "MissAV",
+                                    addonId = "missav",
+                                    resolution = res,
+                                    sizeBytes = sizeBytes,
+                                    sizeText = sizeStr,
+                                    format = if (sUrl.endsWith(".mp4")) "MP4 Direct" else "HLS Proxied",
+                                    codec = if (title.contains("x265", ignoreCase = true) || title.contains("HEVC", ignoreCase = true)) "HEVC" else "x264",
+                                    source = "Surrit CDN",
+                                    audio = if (title.contains("English", ignoreCase = true)) "English" else "Japanese (Original)",
+                                    headers = getStreamHeaders(),
+                                    isDirect = isDirect
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (ignored: Throwable) {}
+
+        // Fallback to local stream options if main addon stream endpoint is empty
+        if (mainStreams.isEmpty()) {
+            val targetItem = item ?: allVideosMap[id.replace("missav:", "").trim()]
+            if (targetItem != null) {
+                val options = getStreamOptions(targetItem)
+                for (opt in options) {
+                    mainStreams.add(
+                        StreamItem(
+                            name = if (opt.isDirect) "MissAV [Fast Direct]" else "MissAV [Adaptive]",
+                            title = "${targetItem.code} ${targetItem.title}\n${opt.label}",
+                            description = opt.label,
+                            url = opt.streamUrl,
+                            addonName = "MissAV",
+                            addonId = "missav",
+                            resolution = opt.resolution,
+                            sizeText = if (opt.resolution.contains("1080")) "6.4 GB" else if (opt.resolution.contains("720")) "3.8 GB" else "2.1 GB",
+                            format = if (opt.streamUrl.endsWith(".mp4")) "MP4 Direct" else "HLS Proxied",
+                            codec = "x264",
+                            source = "MissAV Proxy",
+                            audio = "Original Audio",
+                            headers = opt.headers,
+                            isDirect = opt.isDirect
+                        )
+                    )
+                }
+            }
+        }
+
+        if (mainStreams.isNotEmpty()) {
+            streamGroups.add(
+                AddonStreamGroup(
+                    addonName = "MissAV",
+                    addonId = "missav",
+                    streams = mainStreams,
+                    isLoading = false
+                )
+            )
+        }
+
+        // 2. Query any additional enabled addons configured in addonSources
+        for (source in addonSources) {
+            if (source.isBuiltIn || !source.isEnabled) continue
+            try {
+                val base = source.manifestUrl.removeSuffix("/manifest.json").removeSuffix("/")
+                val customUrl = URL("$base/stream/$cleanType/$id.json")
+                val conn = customUrl.openConnection() as HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 4000
+                conn.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                if (conn.responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val root = JSONObject(body)
+                    val arr = root.optJSONArray("streams")
+                    if (arr != null && arr.length() > 0) {
+                        val cStreams = mutableListOf<StreamItem>()
+                        for (i in 0 until arr.length()) {
+                            val sObj = arr.getJSONObject(i)
+                            val sUrl = sObj.optString("url", "")
+                            if (sUrl.isNotBlank()) {
+                                val sName = sObj.optString("name", source.name)
+                                val sTitle = sObj.optString("title", "")
+                                val res = parseResolution(sName, sTitle)
+                                val sizeStr = parseSizeText(sTitle)
+                                cStreams.add(
+                                    StreamItem(
+                                        name = sName,
+                                        title = sTitle,
+                                        description = sObj.optString("description", sTitle),
+                                        url = sUrl,
+                                        addonName = source.name,
+                                        addonId = source.id,
+                                        resolution = res,
+                                        sizeText = sizeStr,
+                                        headers = getStreamHeaders()
+                                    )
+                                )
+                            }
+                        }
+                        if (cStreams.isNotEmpty()) {
+                            streamGroups.add(
+                                AddonStreamGroup(
+                                    addonName = source.name,
+                                    addonId = source.id,
+                                    streams = cStreams,
+                                    isLoading = false
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (ignored: Throwable) {}
+        }
+
+        streamGroups
+    }
+
+    private fun parseResolution(name: String, title: String): String {
+        val combined = "$name $title".lowercase()
+        return when {
+            combined.contains("2160p") || combined.contains("4k") -> "4K"
+            combined.contains("1080p") || combined.contains("fhd") -> "1080p"
+            combined.contains("720p") || combined.contains("hd") -> "720p"
+            combined.contains("480p") || combined.contains("sd") -> "480p"
+            combined.contains("360p") -> "360p"
+            else -> "HD"
+        }
+    }
+
+    private fun parseSizeText(title: String): String? {
+        val regex = Regex("(\\d+(?:\\.\\d+)?\\s*(?:GB|MB|GiB|MiB))", RegexOption.IGNORE_CASE)
+        val match = regex.find(title)
+        return match?.value?.uppercase()
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        return if (bytes >= 1024L * 1024L * 1024L) {
+            String.format(java.util.Locale.US, "%.2f GB", bytes.toDouble() / (1024.0 * 1024.0 * 1024.0))
+        } else {
+            String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024.0 * 1024.0))
+        }
     }
 }
