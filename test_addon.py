@@ -96,16 +96,17 @@ def test_meta():
     assert "meta" in data
     meta = data["meta"]
     assert meta["id"] == "missav:nhdtb-213-uncensored-leak"
-    assert "NHDTB-213" in meta["name"]
+    assert meta["name"] == ""
+    assert "NHDTB-213" in meta["description"]
     assert meta.get("poster") is not None
     assert meta.get("background") is not None
-    assert meta.get("logo") is None
+    assert "transparent.png" in meta.get("logo", "")
     assert isinstance(meta.get("genres"), list) and len(meta["genres"]) > 0
     assert isinstance(meta.get("cast"), list)
     assert meta.get("releaseInfo") is not None
     assert meta.get("runtime") is not None
     assert meta.get("ageRating") == "18+"
-    print(f"  PASSED: Rich metadata retrieved in {duration*1000:.2f}ms: {meta['name'][:40]}... (genres: {len(meta['genres'])}, cast: {len(meta['cast'])})")
+    print(f"  PASSED: Rich metadata retrieved in {duration*1000:.2f}ms: clean middle hero, summary in description, {len(meta['genres'])} genres, {len(meta['cast'])} cast")
 
     # Second fetch should be fast cached
     t1 = time.time()
@@ -115,6 +116,13 @@ def test_meta():
     assert dur_cached < 0.1, f"Cached meta took too long: {dur_cached}s"
     print(f"  PASSED: Instant cached metadata retrieved in {dur_cached*1000:.2f}ms")
 
+    # Test transparent PNG endpoint
+    status_png, headers_png, body_png = fetch("/proxy/transparent.png")
+    assert status_png == 200
+    assert headers_png.get("content-type") == "image/png"
+    assert len(body_png) == 67
+    print("  PASSED: /proxy/transparent.png served valid 1x1 transparent PNG")
+
     # Test double slash normalization
     print("Testing double slash normalization //meta/series/missav%3Asnos-359-uncensored-leak.json...")
     status_dbl, _, body_dbl = fetch("//meta/series/missav%3Asnos-359-uncensored-leak.json")
@@ -122,7 +130,7 @@ def test_meta():
     data_dbl = json.loads(body_dbl.decode())
     assert "videos" in data_dbl["meta"]
     assert len(data_dbl["meta"]["videos"]) == 1
-    assert data_dbl["meta"]["logo"] is None
+    assert "transparent.png" in data_dbl["meta"].get("logo", "")
     print("  PASSED: Double slash route and series episode array parsed successfully.")
 
 

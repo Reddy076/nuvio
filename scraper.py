@@ -208,13 +208,50 @@ def format_slug_title(slug: str) -> str:
     return slug.upper().replace("-", " ")
 
 
+_actress_photo_cache: Dict[str, str] = {}
+
+
+def get_actress_avatar(name: str) -> Optional[str]:
+    """Retrieves avatar image URL for a given performer from cache or MissAV search."""
+    clean_name = name.strip()
+    if not clean_name:
+        return None
+    key = clean_name.lower()
+    if key in _actress_photo_cache:
+        return _actress_photo_cache[key]
+
+    simplified = clean_name.split("(")[0].strip().lower()
+    if simplified in _actress_photo_cache:
+        return _actress_photo_cache[simplified]
+
+    try:
+        sess = get_session()
+        search_term = urllib.parse.quote(clean_name.split("(")[0].strip())
+        urls = [f"{m}/en/search/{search_term}" for m in MIRRORS]
+        html_page = fetch_with_fallback(urls)
+        if html_page:
+            matches = re.findall(
+                r'<img[^>]+src=[\"|\'](https://fourhoi\.com/actress/\d+-t\.jpg)[\"|\'][^>]*alt=[\"|\']([^\"|\']+)[\"|\']',
+                html_page,
+            )
+            for img_url, alt_name in matches:
+                a_key = alt_name.strip().lower()
+                _actress_photo_cache[a_key] = img_url
+                _actress_photo_cache[a_key.split("(")[0].strip()] = img_url
+    except Exception as e:
+        logger.debug(f"Performer avatar lookup failed for {name}: {e}")
+
+    return _actress_photo_cache.get(key) or _actress_photo_cache.get(simplified)
+
+
 def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     """
     Extracts rich, complete metadata from a MissAV HTML video page:
     - Display title and original Japanese title
     - Video catalog code
+    - Complete synopsis / summary
     - Exact release date and duration
-    - Cast members (actresses)
+    - Cast members with avatar photo URLs
     - Full categories / genres list
     - Studio / Maker / Label / Director
     - Structured links and extras for Nuvio & Stremio
@@ -240,13 +277,23 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
         else:
             code = clean_slug.upper()
 
-    # 4. Release Date
+    # 4. Summary / Synopsis
+    summary = ""
+    desc_div = re.search(r'<div[^>]*class=["\'][^"\']*line-clamp-2[^"\']*["\'][^>]*>(.*?)</div>', page_html, re.DOTALL)
+    if desc_div:
+        summary = html.unescape(re.sub(r'<[^>]+>', '', desc_div.group(1))).strip()
+    if not summary:
+        og_desc = re.search(r'<meta\s+property=["\']og:description["\']\s+content=["\']([^"\']*)["\']', page_html)
+        if og_desc:
+            summary = html.unescape(og_desc.group(1)).strip()
+
+    # 5. Release Date
     rel_m = re.search(r'<meta\s+property=["\']og:video:release_date["\']\s+content=["\']([^"\']+)["\']', page_html)
     if not rel_m:
         rel_m = re.search(r'<span>Release date:</span>\s*<time[^>]*>([^<]+)</time>', page_html)
     release_date = rel_m.group(1).strip() if rel_m else "2024"
 
-    # 5. Duration / Runtime
+    # 6. Duration / Runtime
     dur_m = re.search(r'<meta\s+property=["\']og:video:duration["\']\s+content=["\']([^"\']+)["\']', page_html)
     if dur_m and dur_m.group(1).isdigit():
         duration_sec = int(dur_m.group(1).strip())
@@ -255,7 +302,7 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     else:
         runtime = "120 min"
 
-    # 6. Actresses / Cast
+    # 7. Actresses / Cast
     actresses = []
     actress_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Actress:</span>(.*?)</div>', page_html, re.DOTALL)
     if actress_div:
@@ -270,7 +317,7 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
             if clean_a and clean_a.lower() not in ["ranking", "actress", "all"] and clean_a not in actresses:
                 actresses.append(clean_a)
 
-    # 7. Genres / Categories
+    # 8. Genres / Categories
     genres = []
     genre_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Genre:</span>(.*?)</div>', page_html, re.DOTALL)
     if genre_div:
@@ -281,32 +328,36 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     if not genres:
         genres = ["MissAV", "Japanese AV", "Uncensored"]
 
-    # 8. Maker / Studio
-    maker_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Maker:</span>(.*?)</div>', page_html, re.DOTALL)
+    # 9. Maker / Studio
     maker = ""
+    maker_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Maker:</span>(.*?)</div>', page_html, re.DOTALL)
     if maker_div:
         m_match = re.search(r'<a[^>]*>([^<]+)</a>', maker_div.group(1))
         if m_match:
             maker = html.unescape(m_match.group(1)).strip()
 
-    # 9. Label
-    label_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Label:</span>(.*?)</div>', page_html, re.DOTALL)
+    # 10. Label
     label = ""
+    label_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Label:</span>(.*?)</div>', page_html, re.DOTALL)
     if label_div:
         l_match = re.search(r'<a[^>]*>([^<]+)</a>', label_div.group(1))
         if l_match:
             label = html.unescape(l_match.group(1)).strip()
 
-    # 10. Director
-    director_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Director:</span>(.*?)</div>', page_html, re.DOTALL)
+    # 11. Director
     director = ""
+    director_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Director:</span>(.*?)</div>', page_html, re.DOTALL)
     if director_div:
         d_match = re.search(r'<a[^>]*>([^<]+)</a>', director_div.group(1))
         if d_match:
             director = html.unescape(d_match.group(1)).strip()
 
-    # Description
-    desc_parts = [title]
+    # 12. Description: Title + Summary + Original Title + Code
+    desc_parts = []
+    if title:
+        desc_parts.append(title)
+    if summary and summary.lower() != title.lower():
+        desc_parts.append(summary)
     if original_title and original_title != title:
         desc_parts.append(f"Original: {original_title}")
     if code and code not in title:
@@ -332,10 +383,22 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     directors = [director] if director else []
     writers = list(dict.fromkeys([w for w in [maker, label] if w]))
 
+    # Cast list with avatar photos
+    cast_objs = []
+    for a in actresses:
+        photo = get_actress_avatar(a)
+        cast_objs.append({
+            "name": a,
+            "character": "Cast",
+            "role": "Cast",
+            "photo": photo,
+        })
+
     return {
         "slug": clean_slug,
         "title": title,
         "original_title": original_title,
+        "summary": summary,
         "code": code,
         "poster": poster,
         "background": poster,
@@ -349,10 +412,11 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
         "genres": genres,
         "actresses": actresses,
         "cast": actresses,
+        "cast_objs": cast_objs,
         "director": directors,
         "writer": writers,
         "app_extras": {
-            "cast": [{"name": a, "character": "Cast", "role": "Cast"} for a in actresses],
+            "cast": cast_objs,
             "directors": directors,
             "writers": writers,
         },
@@ -361,19 +425,22 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     }
 
 
-def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie") -> Dict:
+def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie", base_url: str = "") -> Dict:
     title = data.get("title") or format_slug_title(clean_slug)
     poster = data.get("poster") or f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
     background = data.get("background") or poster
     release_info = data.get("releaseInfo") or "2024"
 
+    # Transparent 1x1 image so Nuvio leaves the poster backdrop completely clean
+    transparent_logo = f"{base_url}/proxy/transparent.png" if base_url else None
+
     meta_obj = {
         "id": f"missav:{clean_slug}",
         "type": media_type,
-        "name": title,
+        "name": "",  # Empty string so no text is rendered across the middle of the poster
         "poster": poster,
         "background": background,
-        "logo": None,  # None ensures Nuvio displays clean bold title typography
+        "logo": transparent_logo,
         "description": data.get("description") or f"MissAV Video: {title}",
         "releaseInfo": release_info,
         "runtime": data.get("runtime") or "120 min",
@@ -386,7 +453,7 @@ def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie")
         "director": data.get("director") or [],
         "writer": data.get("writer") or [],
         "app_extras": data.get("app_extras") or {
-            "cast": [{"name": a, "character": "Cast", "role": "Cast"} for a in (data.get("cast") or [])],
+            "cast": data.get("cast_objs") or [{"name": a, "character": "Cast", "role": "Cast"} for a in (data.get("cast") or [])],
             "directors": data.get("director") or [],
             "writers": data.get("writer") or [],
         },
@@ -412,7 +479,7 @@ def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie")
     return meta_obj
 
 
-def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
+def get_video_meta(slug: str, media_type: str = "movie", base_url: str = "") -> Dict:
     """
     Returns complete, instant metadata for Stremio / Nuvio with rich details:
     actresses, genres, release date, duration, maker/studio, and clean title.
@@ -427,16 +494,16 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
     meta_cache_key = f"meta_v4:{clean_slug}"
     cached = _get_cache(meta_cache_key)
     if cached and cached.get("rich"):
-        return _build_meta_response(cached, clean_slug, media_type)
+        return _build_meta_response(cached, clean_slug, media_type, base_url=base_url)
 
     cached_store = _meta_store.get(clean_slug)
     if cached_store and cached_store.get("rich"):
-        return _build_meta_response(cached_store, clean_slug, media_type)
+        return _build_meta_response(cached_store, clean_slug, media_type, base_url=base_url)
 
     # 2. Check if stream info has rich metadata
     stream_cache = _get_cache(f"video_v3:{clean_slug}")
     if stream_cache and stream_cache.get("rich"):
-        return _build_meta_response(stream_cache, clean_slug, media_type)
+        return _build_meta_response(stream_cache, clean_slug, media_type, base_url=base_url)
 
     # 3. Fetch video page to parse rich metadata
     urls = [f"{m}/en/{clean_slug}" for m in MIRRORS]
@@ -458,7 +525,7 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
         meta_info = parse_video_page_metadata(page_html, clean_slug)
         _meta_store[clean_slug] = meta_info
         _set_cache(meta_cache_key, meta_info)
-        return _build_meta_response(meta_info, clean_slug, media_type)
+        return _build_meta_response(meta_info, clean_slug, media_type, base_url=base_url)
 
     # 4. Graceful fallback if network is unreachable
     fallback_title = cached_store.get("title") if cached_store else format_slug_title(clean_slug)
@@ -482,7 +549,7 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
         "links": [],
         "rich": False,
     }
-    return _build_meta_response(fallback_meta, clean_slug, media_type)
+    return _build_meta_response(fallback_meta, clean_slug, media_type, base_url=base_url)
 
 
 def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:

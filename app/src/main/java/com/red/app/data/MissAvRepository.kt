@@ -623,7 +623,9 @@ object MissAvRepository {
                     }
 
                     val castList = mutableListOf<MetaPerson>()
-                    val castArr = meta.optJSONArray("cast")
+                    val appExtras = meta.optJSONObject("app_extras")
+                    val appExtrasCast = appExtras?.optJSONArray("cast")
+                    val castArr = appExtrasCast ?: meta.optJSONArray("cast")
                     if (castArr != null) {
                         for (i in 0 until castArr.length()) {
                             val cObj = castArr.optJSONObject(i)

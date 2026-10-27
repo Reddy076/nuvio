@@ -395,7 +395,7 @@ private fun DetailHero(
         ?: meta?.poster?.takeIf { it.isNotBlank() }
         ?: item.bannerUrl.ifBlank { item.posterUrl }
 
-    val displayTitle = (meta?.name?.takeIf { it.isNotBlank() } ?: item.title).uppercase()
+    val displayTitle = (meta?.name ?: "").uppercase()
 
     val genresList = meta?.genres?.takeIf { it.isNotEmpty() }
         ?: item.genres.takeIf { it.isNotEmpty() }
@@ -465,20 +465,21 @@ private fun DetailHero(
                 .padding(bottom = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Centered Title Text
-            Text(
-                text = displayTitle,
-                color = Color.White,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.2.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 34.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
+            // Centered Title Text (only if not empty)
+            if (displayTitle.isNotBlank()) {
+                Text(
+                    text = displayTitle,
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.2.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 34.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
 
             // Subtitle / Genres Line
             if (genresList.isNotEmpty()) {

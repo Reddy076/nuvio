@@ -357,8 +357,20 @@ def get_catalog(type: str, id: str, request: Request):
     return JSONResponse({"metas": items})
 
 
+TRANSPARENT_1X1_PNG = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+
+
+@app.api_route("/proxy/transparent.png", methods=["GET", "HEAD"])
+def get_transparent_png():
+    return Response(
+        content=TRANSPARENT_1X1_PNG,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.api_route("/meta/{type}/{id:path}", methods=["GET", "HEAD"])
-def get_meta(type: str, id: str):
+def get_meta(type: str, id: str, request: Request):
     """
     Returns metadata for a specific video.
     Guaranteed instant (<1ms) response to eliminate 'Could not load details' timeouts.
@@ -367,7 +379,8 @@ def get_meta(type: str, id: str):
     clean_slug = clean_id.replace("missav:", "").replace(".json", "").strip()
     clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
 
-    meta_obj = scraper.get_video_meta(clean_slug, media_type=type)
+    base_url = get_base_url(request)
+    meta_obj = scraper.get_video_meta(clean_slug, media_type=type, base_url=base_url)
     return JSONResponse({"meta": meta_obj})
 
 
