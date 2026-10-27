@@ -208,39 +208,189 @@ def format_slug_title(slug: str) -> str:
     return slug.upper().replace("-", " ")
 
 
-def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
+def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     """
-    Returns complete, instant (<1ms) metadata for Stremio / Nuvio.
-    Never fails or times out, guaranteeing the details screen always loads cleanly.
+    Extracts rich, complete metadata from a MissAV HTML video page:
+    - Display title and original Japanese title
+    - Video catalog code
+    - Exact release date and duration
+    - Cast members (actresses)
+    - Full categories / genres list
+    - Studio / Maker / Label / Director
+    - Structured links and extras for Nuvio & Stremio
     """
-    clean_slug = slug.replace("missav:", "").strip()
-    clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
+    # 1. Display title
+    title_match = re.search(r'<h1[^>]*class="[^"]*text-base[^"]*"[^>]*>(.*?)</h1>', page_html, re.DOTALL)
+    title = html.unescape(title_match.group(1)).strip() if title_match else ""
+    if not title:
+        og_title = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', page_html)
+        title = html.unescape(og_title.group(1)).strip() if og_title else format_slug_title(clean_slug)
 
-    # 1. Check in-memory card store (populated by catalogs & search)
-    cached_info = _meta_store.get(clean_slug)
-    video_cache = _get_cache(f"video:{clean_slug}")
+    # 2. Original title
+    orig_title_m = re.search(r'<span>Title:</span>\s*<span[^>]*>(.*?)</span>', page_html, re.DOTALL)
+    original_title = html.unescape(orig_title_m.group(1)).strip() if orig_title_m else ""
 
-    if video_cache and video_cache.get("title"):
-        title = video_cache["title"]
-        poster = video_cache.get("poster") or f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
-    elif cached_info:
-        title = cached_info["title"]
-        poster = cached_info["poster"]
+    # 3. Code
+    code_m = re.search(r'<span>Code:</span>\s*<span[^>]*>(.*?)</span>', page_html, re.DOTALL)
+    code = html.unescape(code_m.group(1)).strip() if code_m else ""
+    if not code:
+        parts = clean_slug.split("-")
+        if len(parts) >= 2 and parts[0].isalpha() and parts[1].isdigit():
+            code = f"{parts[0].upper()}-{parts[1]}"
+        else:
+            code = clean_slug.upper()
+
+    # 4. Release Date
+    rel_m = re.search(r'<meta\s+property=["\']og:video:release_date["\']\s+content=["\']([^"\']+)["\']', page_html)
+    if not rel_m:
+        rel_m = re.search(r'<span>Release date:</span>\s*<time[^>]*>([^<]+)</time>', page_html)
+    release_date = rel_m.group(1).strip() if rel_m else "2024"
+
+    # 5. Duration / Runtime
+    dur_m = re.search(r'<meta\s+property=["\']og:video:duration["\']\s+content=["\']([^"\']+)["\']', page_html)
+    if dur_m and dur_m.group(1).isdigit():
+        duration_sec = int(dur_m.group(1).strip())
+        minutes = max(1, round(duration_sec / 60))
+        runtime = f"{minutes} min"
     else:
-        title = format_slug_title(clean_slug)
-        poster = f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
+        runtime = "120 min"
+
+    # 6. Actresses / Cast
+    actresses = []
+    actress_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Actress:</span>(.*?)</div>', page_html, re.DOTALL)
+    if actress_div:
+        for a in re.findall(r'<a[^>]*>([^<]+)</a>', actress_div.group(1)):
+            clean_a = html.unescape(a.strip())
+            if clean_a and clean_a.lower() not in ["ranking", "actress", "all"] and clean_a not in actresses:
+                actresses.append(clean_a)
+    if not actresses:
+        og_actors = re.findall(r'<meta\s+property=["\']og:video:actor["\']\s+content=["\']([^"\']+)["\']', page_html)
+        for a in og_actors:
+            clean_a = html.unescape(a.strip())
+            if clean_a and clean_a.lower() not in ["ranking", "actress", "all"] and clean_a not in actresses:
+                actresses.append(clean_a)
+
+    # 7. Genres / Categories
+    genres = []
+    genre_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Genre:</span>(.*?)</div>', page_html, re.DOTALL)
+    if genre_div:
+        for g in re.findall(r'<a[^>]*>([^<]+)</a>', genre_div.group(1)):
+            clean_g = html.unescape(g.strip())
+            if clean_g and clean_g.lower() not in ["ranking", "genre", "genres"] and clean_g not in genres:
+                genres.append(clean_g)
+    if not genres:
+        genres = ["MissAV", "Japanese AV", "Uncensored"]
+
+    # 8. Maker / Studio
+    maker_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Maker:</span>(.*?)</div>', page_html, re.DOTALL)
+    maker = ""
+    if maker_div:
+        m_match = re.search(r'<a[^>]*>([^<]+)</a>', maker_div.group(1))
+        if m_match:
+            maker = html.unescape(m_match.group(1)).strip()
+
+    # 9. Label
+    label_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Label:</span>(.*?)</div>', page_html, re.DOTALL)
+    label = ""
+    if label_div:
+        l_match = re.search(r'<a[^>]*>([^<]+)</a>', label_div.group(1))
+        if l_match:
+            label = html.unescape(l_match.group(1)).strip()
+
+    # 10. Director
+    director_div = re.search(r'<div[^>]*class="[^"]*text-secondary[^"]*"[^>]*>\s*<span>Director:</span>(.*?)</div>', page_html, re.DOTALL)
+    director = ""
+    if director_div:
+        d_match = re.search(r'<a[^>]*>([^<]+)</a>', director_div.group(1))
+        if d_match:
+            director = html.unescape(d_match.group(1)).strip()
+
+    # Description
+    desc_parts = [title]
+    if original_title and original_title != title:
+        desc_parts.append(f"Original: {original_title}")
+    if code and code not in title:
+        desc_parts.append(f"Code: {code}")
+    description = "\n\n".join(desc_parts)
+
+    poster = f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
+
+    links = []
+    for a in actresses:
+        enc_a = urllib.parse.quote(a)
+        links.append({"name": a, "category": "cast", "url": f"https://missav.ws/en/actresses/{enc_a}"})
+    for g in genres:
+        enc_g = urllib.parse.quote(g)
+        links.append({"name": g, "category": "genre", "url": f"https://missav.ws/en/genres/{enc_g}"})
+    if maker:
+        enc_m = urllib.parse.quote(maker)
+        links.append({"name": maker, "category": "maker", "url": f"https://missav.ws/en/makers/{enc_m}"})
+    if label and label != maker:
+        enc_l = urllib.parse.quote(label)
+        links.append({"name": label, "category": "label", "url": f"https://missav.ws/en/labels/{enc_l}"})
+
+    directors = [director] if director else []
+    writers = list(dict.fromkeys([w for w in [maker, label] if w]))
+
+    return {
+        "slug": clean_slug,
+        "title": title,
+        "original_title": original_title,
+        "code": code,
+        "poster": poster,
+        "background": poster,
+        "description": description,
+        "releaseInfo": release_date,
+        "runtime": runtime,
+        "ageRating": "18+",
+        "status": "Released",
+        "country": "Japan",
+        "language": "Japanese",
+        "genres": genres,
+        "actresses": actresses,
+        "cast": actresses,
+        "director": directors,
+        "writer": writers,
+        "app_extras": {
+            "cast": [{"name": a, "character": "Cast", "role": "Cast"} for a in actresses],
+            "directors": directors,
+            "writers": writers,
+        },
+        "links": links,
+        "rich": True,
+    }
+
+
+def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie") -> Dict:
+    title = data.get("title") or format_slug_title(clean_slug)
+    poster = data.get("poster") or f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
+    background = data.get("background") or poster
+    release_info = data.get("releaseInfo") or "2024"
 
     meta_obj = {
         "id": f"missav:{clean_slug}",
         "type": media_type,
         "name": title,
         "poster": poster,
-        "background": poster,
-        "logo": "https://missav.ws/img/flags/united-kingdom.png",
-        "description": f"MissAV Video: {title}",
-        "genres": ["MissAV", "Japanese AV", "Uncensored"],
-        "releaseInfo": "2024",
-        "runtime": "120 min",
+        "background": background,
+        "logo": None,  # None ensures Nuvio displays clean bold title typography
+        "description": data.get("description") or f"MissAV Video: {title}",
+        "releaseInfo": release_info,
+        "runtime": data.get("runtime") or "120 min",
+        "ageRating": data.get("ageRating") or "18+",
+        "status": data.get("status") or "Released",
+        "country": data.get("country") or "Japan",
+        "language": data.get("language") or "Japanese",
+        "genres": data.get("genres") or ["MissAV", "Japanese AV", "Uncensored"],
+        "cast": data.get("cast") or [],
+        "director": data.get("director") or [],
+        "writer": data.get("writer") or [],
+        "app_extras": data.get("app_extras") or {
+            "cast": [{"name": a, "character": "Cast", "role": "Cast"} for a in (data.get("cast") or [])],
+            "directors": data.get("director") or [],
+            "writers": data.get("writer") or [],
+        },
+        "links": data.get("links") or [],
     }
 
     if media_type in ["series", "tv"]:
@@ -250,7 +400,7 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
                 "title": title,
                 "season": 1,
                 "episode": 1,
-                "released": "2024-01-01T00:00:00.000Z",
+                "released": f"{release_info}-01-01T00:00:00.000Z" if len(release_info) == 4 else f"{release_info}T00:00:00.000Z",
                 "thumbnail": poster,
             }
         ]
@@ -260,6 +410,79 @@ def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
         }
 
     return meta_obj
+
+
+def get_video_meta(slug: str, media_type: str = "movie") -> Dict:
+    """
+    Returns complete, instant metadata for Stremio / Nuvio with rich details:
+    actresses, genres, release date, duration, maker/studio, and clean title.
+    """
+    clean_slug = urllib.parse.unquote(slug).strip()
+    clean_slug = clean_slug.replace("missav:", "").replace(".json", "").strip()
+    clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
+    clean_slug = clean_slug.lower()
+    clean_slug = re.sub(r'\s+', '-', clean_slug)
+
+    # 1. Check in-memory store and disk cache for existing rich metadata
+    meta_cache_key = f"meta_v4:{clean_slug}"
+    cached = _get_cache(meta_cache_key)
+    if cached and cached.get("rich"):
+        return _build_meta_response(cached, clean_slug, media_type)
+
+    cached_store = _meta_store.get(clean_slug)
+    if cached_store and cached_store.get("rich"):
+        return _build_meta_response(cached_store, clean_slug, media_type)
+
+    # 2. Check if stream info has rich metadata
+    stream_cache = _get_cache(f"video_v3:{clean_slug}")
+    if stream_cache and stream_cache.get("rich"):
+        return _build_meta_response(stream_cache, clean_slug, media_type)
+
+    # 3. Fetch video page to parse rich metadata
+    urls = [f"{m}/en/{clean_slug}" for m in MIRRORS]
+    page_html = fetch_with_fallback(urls)
+
+    if not page_html:
+        base_code = re.sub(r'-(uncensored-leak|chinese-subtitle|uncensored|leak|c)$', '', clean_slug)
+        alt_slugs = []
+        if base_code != clean_slug:
+            alt_slugs.append(base_code)
+        else:
+            alt_slugs.append(f"{clean_slug}-uncensored-leak")
+        for alt in alt_slugs:
+            page_html = fetch_with_fallback([f"{m}/en/{alt}" for m in MIRRORS])
+            if page_html:
+                break
+
+    if page_html:
+        meta_info = parse_video_page_metadata(page_html, clean_slug)
+        _meta_store[clean_slug] = meta_info
+        _set_cache(meta_cache_key, meta_info)
+        return _build_meta_response(meta_info, clean_slug, media_type)
+
+    # 4. Graceful fallback if network is unreachable
+    fallback_title = cached_store.get("title") if cached_store else format_slug_title(clean_slug)
+    fallback_poster = cached_store.get("poster") if cached_store else f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
+    fallback_meta = {
+        "slug": clean_slug,
+        "title": fallback_title,
+        "poster": fallback_poster,
+        "background": fallback_poster,
+        "description": f"MissAV Video: {fallback_title}",
+        "releaseInfo": "2024",
+        "runtime": "120 min",
+        "ageRating": "18+",
+        "status": "Released",
+        "country": "Japan",
+        "language": "Japanese",
+        "genres": ["MissAV", "Japanese AV", "Uncensored"],
+        "cast": [],
+        "director": [],
+        "writer": [],
+        "links": [],
+        "rich": False,
+    }
+    return _build_meta_response(fallback_meta, clean_slug, media_type)
 
 
 def fetch_with_fallback(urls: List[str], retries_per_url: int = 1) -> str:
@@ -608,9 +831,12 @@ def _fetch_single_video_stream_info(clean_slug: str) -> Optional[Dict]:
     if not page_html:
         return None
 
-    # Extract title
-    title_match = re.search(r'<h1[^>]*class="[^"]*text-base[^"]*"[^>]*>(.*?)</h1>', page_html, re.DOTALL)
-    title = html.unescape(title_match.group(1)).strip() if title_match else format_slug_title(clean_slug)
+    # Extract title and rich metadata
+    meta_info = parse_video_page_metadata(page_html, clean_slug)
+    _meta_store[clean_slug] = meta_info
+    _set_cache(f"meta_v4:{clean_slug}", meta_info)
+
+    title = meta_info.get("title") or format_slug_title(clean_slug)
 
     uuid = None
     source = None
@@ -657,9 +883,9 @@ def _fetch_single_video_stream_info(clean_slug: str) -> Optional[Dict]:
 
     poster = f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
 
-    return {
+    res = {
         "slug": clean_slug,
-        "title": title,
+        "title": meta_info.get("title") or title,
         "uuid": uuid,
         "poster": poster,
         "source": source,
@@ -669,7 +895,10 @@ def _fetch_single_video_stream_info(clean_slug: str) -> Optional[Dict]:
         "url_1080p": f"https://surrit.com/{uuid}/1080p/video.m3u8",
         "url_720p": f"https://surrit.com/{uuid}/720p/video.m3u8",
         "url_480p": f"https://surrit.com/{uuid}/480p/video.m3u8",
+        "rich": True,
     }
+    res.update({k: v for k, v in meta_info.items() if k not in res})
+    return res
 
 
 def get_video_stream_info(slug: str) -> Optional[Dict]:

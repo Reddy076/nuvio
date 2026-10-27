@@ -87,7 +87,7 @@ def test_search():
 
 
 def test_meta():
-    print("Testing instant /meta/movie/missav:nhdtb-213-uncensored-leak.json...")
+    print("Testing /meta/movie/missav:nhdtb-213-uncensored-leak.json...")
     t0 = time.time()
     status, headers, body = fetch("/meta/movie/missav:nhdtb-213-uncensored-leak.json")
     duration = time.time() - t0
@@ -99,8 +99,21 @@ def test_meta():
     assert "NHDTB-213" in meta["name"]
     assert meta.get("poster") is not None
     assert meta.get("background") is not None
-    assert duration < 0.1, f"Meta took too long: {duration}s"
-    print(f"  PASSED: Instant metadata retrieved in {duration*1000:.2f}ms: {meta['name'][:40]}...")
+    assert meta.get("logo") is None
+    assert isinstance(meta.get("genres"), list) and len(meta["genres"]) > 0
+    assert isinstance(meta.get("cast"), list)
+    assert meta.get("releaseInfo") is not None
+    assert meta.get("runtime") is not None
+    assert meta.get("ageRating") == "18+"
+    print(f"  PASSED: Rich metadata retrieved in {duration*1000:.2f}ms: {meta['name'][:40]}... (genres: {len(meta['genres'])}, cast: {len(meta['cast'])})")
+
+    # Second fetch should be fast cached
+    t1 = time.time()
+    status_c, _, body_c = fetch("/meta/movie/missav:nhdtb-213-uncensored-leak.json")
+    dur_cached = time.time() - t1
+    assert status_c == 200
+    assert dur_cached < 0.1, f"Cached meta took too long: {dur_cached}s"
+    print(f"  PASSED: Instant cached metadata retrieved in {dur_cached*1000:.2f}ms")
 
     # Test double slash normalization
     print("Testing double slash normalization //meta/series/missav%3Asnos-359-uncensored-leak.json...")
@@ -109,6 +122,7 @@ def test_meta():
     data_dbl = json.loads(body_dbl.decode())
     assert "videos" in data_dbl["meta"]
     assert len(data_dbl["meta"]["videos"]) == 1
+    assert data_dbl["meta"]["logo"] is None
     print("  PASSED: Double slash route and series episode array parsed successfully.")
 
 
