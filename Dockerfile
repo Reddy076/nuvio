@@ -12,9 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV PORT=7000
+ENV PORT=8000
 ENV HOST=0.0.0.0
 
-EXPOSE 7000
+EXPOSE 8000
 
 CMD ["python", "app.py"]
