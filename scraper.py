@@ -79,6 +79,48 @@ CACHE_TTL = 1800  # 30 minutes
 _meta_store: Dict[str, Dict] = {}
 
 
+def get_code_from_slug(slug: str) -> str:
+    """
+    Extracts the official release code from a slug.
+    Strips modifiers like -uncensored-leak, -english-subtitle, -chinese-subtitle, etc.
+    Examples:
+      'meyd-490-uncensored-leak' -> 'MEYD-490'
+      'meyd-490-english-subtitle' -> 'MEYD-490'
+      'fc2-ppv-4999361' -> 'FC2-PPV-4999361'
+      'pondo-102726_001' -> 'PONDO-102726_001'
+      '140c02487' -> '140C02487'
+      'caribbeancom-102726-001' -> 'CARIBBEANCOM-102726-001'
+    """
+    s = slug.strip()
+    while True:
+        new_s = re.sub(
+            r'-(uncensored-leak|chinese-subtitle|uncensored|leak|english-subtitle|c)$',
+            '',
+            s,
+            flags=re.I,
+        )
+        if new_s == s:
+            break
+        s = new_s
+    return s.upper()
+
+
+def format_slug_title(slug: str) -> str:
+    """Formats a clean title from a video slug e.g. 'snos-359-uncensored-leak' -> 'SNOS-359 (Uncensored Leak)'."""
+    code = get_code_from_slug(slug)
+    clean_base = re.sub(
+        r'-(uncensored-leak|chinese-subtitle|uncensored|leak|english-subtitle|c)$',
+        '',
+        slug.strip(),
+        flags=re.I,
+    )
+    suffix = slug[len(clean_base):].strip("-_ ")
+    if suffix:
+        rest = " ".join(p.capitalize() for p in suffix.split("-") if p)
+        return f"{code} ({rest})" if rest else code
+    return code
+
+
 def load_disk_cache():
     """Loads cached catalogs and metadata from persistent storage."""
     global _cache, _meta_store
@@ -88,6 +130,17 @@ def load_disk_cache():
                 saved = json.load(f)
                 _cache = saved.get("cache", {})
                 _meta_store = saved.get("meta_store", {})
+                # Migrate any stored metadata titles so they always start with the official video code
+                for slug, entry in list(_meta_store.items()):
+                    if isinstance(entry, dict) and "title" in entry:
+                        c = get_code_from_slug(slug)
+                        t = entry.get("title") or ""
+                        if t and not t.upper().startswith(c.upper()):
+                            entry["title"] = f"{c} {t}"
+                # Invalidate stale catalog, search, and recommendation caches so fresh HTML is parsed with codes
+                for k in list(_cache.keys()):
+                    if k.startswith(("catalog:", "search:", "similar:")):
+                        del _cache[k]
                 logger.info(f"Loaded disk cache: {len(_cache)} entries, {len(_meta_store)} metas.")
         except Exception as e:
             logger.warning(f"Error loading disk cache: {e}")
@@ -158,10 +211,23 @@ def extract_packer_blocks(page_html: str) -> List[str]:
 def parse_video_cards(page_html: str) -> List[Dict]:
     """
     Parses video cards from a MissAV HTML page.
+    Extracts the official video code and title from link text or image metadata.
     Saves metadata to _meta_store for instant <1ms /meta responses.
     """
     items = []
     seen = set()
+
+    # 1. Extract full titles from the text links directly below video thumbnails:
+    # <div class="my-2 text-sm text-nord4 truncate"><a ... href=".../slug">CODE Title</a></div>
+    link_titles = {}
+    for m in re.finditer(
+        r'<div[^>]*class=["\'][^"\']*text-nord4[^"\']*["\'][^>]*>\s*<a[^>]*href=["\'][^"\']*/([a-zA-Z0-9_-]+)["\'][^>]*>([\s\S]*?)</a>',
+        page_html,
+    ):
+        c_slug = m.group(1).strip()
+        raw_text = html.unescape(re.sub(r'<[^>]+>', '', m.group(2))).strip()
+        if raw_text:
+            link_titles[c_slug] = raw_text
 
     # Pattern targeting lozad thumbnail image cards with any CDN (fourhoi.com, fourhoi.mrstcdn.store, etc.)
     img_pattern = r'data-src="([^"]*?/([a-zA-Z0-9_-]+)/cover-[tn]\.jpg)"[\s\S]*?alt="([^"]*)"'
@@ -172,8 +238,17 @@ def parse_video_cards(page_html: str) -> List[Dict]:
             continue
         seen.add(slug)
 
-        title = html.unescape(alt).strip()
+        code = get_code_from_slug(slug)
+
+        # Prefer full title from link text (which already includes CODE), fallback to alt
+        title = link_titles.get(slug)
         if not title:
+            title = html.unescape(alt).strip()
+
+        if title:
+            if not title.upper().startswith(code.upper()):
+                title = f"{code} {title}"
+        else:
             title = format_slug_title(slug)
 
         poster = f"https://fourhoi.com/{slug}/cover-n.jpg"
@@ -198,16 +273,6 @@ def parse_video_cards(page_html: str) -> List[Dict]:
         })
 
     return items
-
-
-def format_slug_title(slug: str) -> str:
-    """Formats a clean title from a video slug e.g. 'snos-359-uncensored-leak' -> 'SNOS-359 (Uncensored Leak)'."""
-    parts = slug.split("-")
-    if len(parts) >= 2 and parts[0].isalpha() and parts[1].isdigit():
-        code = f"{parts[0].upper()}-{parts[1]}"
-        rest = " ".join(p.capitalize() for p in parts[2:])
-        return f"{code} ({rest})" if rest else code
-    return slug.upper().replace("-", " ")
 
 
 _actress_photo_cache: Dict[str, str] = {}
@@ -273,11 +338,11 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     code_m = re.search(r'<span>Code:</span>\s*<span[^>]*>(.*?)</span>', page_html, re.DOTALL)
     code = html.unescape(code_m.group(1)).strip() if code_m else ""
     if not code:
-        parts = clean_slug.split("-")
-        if len(parts) >= 2 and parts[0].isalpha() and parts[1].isdigit():
-            code = f"{parts[0].upper()}-{parts[1]}"
-        else:
-            code = clean_slug.upper()
+        code = get_code_from_slug(clean_slug)
+
+    # Ensure display title starts with the code
+    if title and code and not title.upper().startswith(code.upper()):
+        title = f"{code} {title}"
 
     # 4. Summary / Synopsis
     summary = ""
@@ -465,7 +530,7 @@ def fetch_similar_videos(slug: str, count: int = 12) -> List[Dict]:
                 "count": count,
                 "scenario": "mobile-watch-next",
                 "returnProperties": True,
-                "includedProperties": ["title", "duration", "has_chinese_subtitle", "has_english_subtitle", "is_uncensored_leak", "dm"]
+                "includedProperties": ["title", "title_en", "duration", "has_chinese_subtitle", "has_english_subtitle", "is_uncensored_leak", "dm"]
             }
             resp = requests.post(signed_url, json=body, timeout=4)
             if resp.status_code == 200:
@@ -475,8 +540,12 @@ def fetch_similar_videos(slug: str, count: int = 12) -> List[Dict]:
                     if not r_id or r_id == clean or r_id == base_code:
                         continue
                     props = r.get("values", {})
-                    t = props.get("title")
-                    if not t:
+                    t = props.get("title_en") or props.get("title")
+                    code = get_code_from_slug(r_id)
+                    if t:
+                        if not t.upper().startswith(code.upper()):
+                            t = f"{code} {t}"
+                    else:
                         t = format_slug_title(r_id)
                     poster = f"https://fourhoi.com/{r_id}/cover-n.jpg"
                     thumbnail = f"https://fourhoi.com/{r_id}/cover-t.jpg"
@@ -510,15 +579,19 @@ def fetch_similar_videos(slug: str, count: int = 12) -> List[Dict]:
             prefix = prefix_match.group(1).lower()
             for k, meta in _meta_store.items():
                 if k != clean and k.lower().startswith(prefix):
+                    code = get_code_from_slug(k)
+                    m_title = meta.get("title") or format_slug_title(k)
+                    if not m_title.upper().startswith(code.upper()):
+                        m_title = f"{code} {m_title}"
                     similar_items.append({
                         "id": f"missav:{k}",
                         "slug": k,
-                        "name": meta.get("title") or format_slug_title(k),
-                        "title": meta.get("title") or format_slug_title(k),
+                        "name": m_title,
+                        "title": m_title,
                         "poster": meta.get("poster") or f"https://fourhoi.com/{k}/cover-n.jpg",
                         "thumbnail": meta.get("thumbnail") or f"https://fourhoi.com/{k}/cover-t.jpg",
                         "type": "movie",
-                        "description": meta.get("description") or f"MissAV Video: {k}",
+                        "description": meta.get("description") or f"MissAV Video: {m_title}",
                     })
                     if len(similar_items) >= count:
                         break
@@ -638,7 +711,10 @@ def get_video_meta(slug: str, media_type: str = "movie", base_url: str = "") -> 
         return _build_meta_response(meta_info, clean_slug, media_type, base_url=base_url)
 
     # 4. Graceful fallback if network is unreachable
+    code = get_code_from_slug(clean_slug)
     fallback_title = cached_store.get("title") if cached_store else format_slug_title(clean_slug)
+    if fallback_title and not fallback_title.upper().startswith(code.upper()):
+        fallback_title = f"{code} {fallback_title}"
     fallback_poster = cached_store.get("poster") if cached_store else f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
     fallback_meta = {
         "slug": clean_slug,
