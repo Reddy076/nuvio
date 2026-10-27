@@ -11,6 +11,8 @@ import html
 import time
 import urllib.parse
 import logging
+import hashlib
+import hmac
 from typing import List, Dict, Optional, Tuple
 from curl_cffi import requests
 
@@ -425,6 +427,106 @@ def parse_video_page_metadata(page_html: str, clean_slug: str) -> Dict:
     }
 
 
+def fetch_similar_videos(slug: str, count: int = 12) -> List[Dict]:
+    """
+    Fetches real MissAV recommended / 'More like this' videos using MissAV's Recombee recommendation engine.
+    Pre-caches returned cards into _meta_store for instant detail loading.
+    Falls back gracefully to matching actress or series code if Recombee is unavailable.
+    """
+    clean = slug.replace("missav:", "").replace(".json", "").strip().lower()
+    clean = re.sub(r'(:\d+)+$', '', clean).strip("/")
+    clean = re.sub(r'\s+', '-', clean)
+
+    cache_key = f"similar_v2:{clean}"
+    cached = _get_cache(cache_key)
+    if cached is not None:
+        return cached
+
+    base_code = re.sub(r'-(uncensored-leak|chinese-subtitle|uncensored|leak|c)$', '', clean)
+    db_id = "missav-default"
+    token = "Ikkg568nlM51RHvldlPvc2GzZPE9R4XGzaH9Qj4zK9npbbbTly1gj9K4mgRn0QlV"
+    base_uri = "client-rapi-missav.recombee.com"
+
+    similar_items = []
+
+    for test_id in [clean, base_code]:
+        if similar_items:
+            break
+        try:
+            path = f"/recomms/items/{test_id}/items/"
+            url_path = f"/{db_id}{path}"
+            ts = int(time.time())
+            sep = "&" if "?" in url_path else "?"
+            url_path_with_ts = f"{url_path}{sep}frontend_timestamp={ts}"
+            sig = hmac.new(token.encode("utf-8"), url_path_with_ts.encode("utf-8"), hashlib.sha1).hexdigest()
+            signed_url = f"https://{base_uri}{url_path_with_ts}&frontend_sign={sig}"
+
+            body = {
+                "count": count,
+                "scenario": "mobile-watch-next",
+                "returnProperties": True,
+                "includedProperties": ["title", "duration", "has_chinese_subtitle", "has_english_subtitle", "is_uncensored_leak", "dm"]
+            }
+            resp = requests.post(signed_url, json=body, timeout=4)
+            if resp.status_code == 200:
+                recomms = resp.json().get("recomms", [])
+                for r in recomms:
+                    r_id = r.get("id", "").strip().lower()
+                    if not r_id or r_id == clean or r_id == base_code:
+                        continue
+                    props = r.get("values", {})
+                    t = props.get("title")
+                    if not t:
+                        t = format_slug_title(r_id)
+                    poster = f"https://fourhoi.com/{r_id}/cover-n.jpg"
+                    thumbnail = f"https://fourhoi.com/{r_id}/cover-t.jpg"
+
+                    # Pre-cache into _meta_store
+                    if r_id not in _meta_store:
+                        _meta_store[r_id] = {
+                            "slug": r_id,
+                            "title": t,
+                            "poster": poster,
+                            "thumbnail": thumbnail,
+                        }
+
+                    similar_items.append({
+                        "id": f"missav:{r_id}",
+                        "slug": r_id,
+                        "name": t,
+                        "title": t,
+                        "poster": poster,
+                        "thumbnail": thumbnail,
+                        "type": "movie",
+                        "description": f"MissAV Video: {t}",
+                    })
+        except Exception as e:
+            logger.debug(f"Recombee recommendation fetch failed for {test_id}: {e}")
+
+    # Fallback to local catalog or search matching series prefix
+    if not similar_items:
+        prefix_match = re.match(r'^([a-zA-Z]+)', clean)
+        if prefix_match:
+            prefix = prefix_match.group(1).lower()
+            for k, meta in _meta_store.items():
+                if k != clean and k.lower().startswith(prefix):
+                    similar_items.append({
+                        "id": f"missav:{k}",
+                        "slug": k,
+                        "name": meta.get("title") or format_slug_title(k),
+                        "title": meta.get("title") or format_slug_title(k),
+                        "poster": meta.get("poster") or f"https://fourhoi.com/{k}/cover-n.jpg",
+                        "thumbnail": meta.get("thumbnail") or f"https://fourhoi.com/{k}/cover-t.jpg",
+                        "type": "movie",
+                        "description": meta.get("description") or f"MissAV Video: {k}",
+                    })
+                    if len(similar_items) >= count:
+                        break
+
+    _set_cache(cache_key, similar_items)
+    return similar_items
+
+
 def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie", base_url: str = "") -> Dict:
     title = data.get("title") or format_slug_title(clean_slug)
     poster = data.get("poster") or f"https://fourhoi.com/{clean_slug}/cover-n.jpg"
@@ -458,6 +560,7 @@ def _build_meta_response(data: Dict, clean_slug: str, media_type: str = "movie",
             "writers": data.get("writer") or [],
         },
         "links": data.get("links") or [],
+        "similar": data.get("similar") or [],
     }
 
     if media_type in ["series", "tv"]:
@@ -494,15 +597,21 @@ def get_video_meta(slug: str, media_type: str = "movie", base_url: str = "") -> 
     meta_cache_key = f"meta_v4:{clean_slug}"
     cached = _get_cache(meta_cache_key)
     if cached and cached.get("rich"):
+        if not cached.get("similar"):
+            cached["similar"] = fetch_similar_videos(clean_slug)
         return _build_meta_response(cached, clean_slug, media_type, base_url=base_url)
 
     cached_store = _meta_store.get(clean_slug)
     if cached_store and cached_store.get("rich"):
+        if not cached_store.get("similar"):
+            cached_store["similar"] = fetch_similar_videos(clean_slug)
         return _build_meta_response(cached_store, clean_slug, media_type, base_url=base_url)
 
     # 2. Check if stream info has rich metadata
     stream_cache = _get_cache(f"video_v3:{clean_slug}")
     if stream_cache and stream_cache.get("rich"):
+        if not stream_cache.get("similar"):
+            stream_cache["similar"] = fetch_similar_videos(clean_slug)
         return _build_meta_response(stream_cache, clean_slug, media_type, base_url=base_url)
 
     # 3. Fetch video page to parse rich metadata
@@ -523,6 +632,7 @@ def get_video_meta(slug: str, media_type: str = "movie", base_url: str = "") -> 
 
     if page_html:
         meta_info = parse_video_page_metadata(page_html, clean_slug)
+        meta_info["similar"] = fetch_similar_videos(clean_slug)
         _meta_store[clean_slug] = meta_info
         _set_cache(meta_cache_key, meta_info)
         return _build_meta_response(meta_info, clean_slug, media_type, base_url=base_url)
@@ -547,6 +657,7 @@ def get_video_meta(slug: str, media_type: str = "movie", base_url: str = "") -> 
         "director": [],
         "writer": [],
         "links": [],
+        "similar": fetch_similar_videos(clean_slug),
         "rich": False,
     }
     return _build_meta_response(fallback_meta, clean_slug, media_type, base_url=base_url)

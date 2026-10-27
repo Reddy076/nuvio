@@ -4,17 +4,13 @@ __pycache__/
 .cache/
 *.log
 access.log
-attachments/
 .env
 .venv
 
-# Android Build Artifacts & Caches
+# Android & Application artifacts (keep addon repo lightweight)
+NuvioMobile/
+*.apk
+attachments/
 .gradle/
 build/
-app/build/
-local.properties
-.idea/
-*.iml
-*.apk
-*.aab
-*.hprof
+app/

@@ -384,6 +384,19 @@ def get_meta(type: str, id: str, request: Request):
     return JSONResponse({"meta": meta_obj})
 
 
+@app.api_route("/similar/{type}/{id:path}", methods=["GET", "HEAD"])
+def get_similar(type: str, id: str, request: Request):
+    """
+    Returns similar / 'More like this' recommendations for a specific video.
+    """
+    clean_id = urllib.parse.unquote(id).strip()
+    clean_slug = clean_id.replace("missav:", "").replace(".json", "").strip()
+    clean_slug = re.sub(r'(:\d+)+$', '', clean_slug).strip("/")
+
+    similar_list = scraper.fetch_similar_videos(clean_slug)
+    return JSONResponse({"similar": similar_list})
+
+
 @app.api_route("/stream/{type}/{id:path}", methods=["GET", "HEAD"])
 def get_stream(type: str, id: str, request: Request):
     """

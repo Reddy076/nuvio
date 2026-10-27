@@ -106,7 +106,9 @@ def test_meta():
     assert meta.get("releaseInfo") is not None
     assert meta.get("runtime") is not None
     assert meta.get("ageRating") == "18+"
-    print(f"  PASSED: Rich metadata retrieved in {duration*1000:.2f}ms: clean middle hero, summary in description, {len(meta['genres'])} genres, {len(meta['cast'])} cast")
+    assert isinstance(meta.get("similar"), list)
+    assert len(meta.get("similar")) > 0
+    print(f"  PASSED: Rich metadata retrieved in {duration*1000:.2f}ms: clean middle hero, summary in description, {len(meta['genres'])} genres, {len(meta['cast'])} cast, {len(meta['similar'])} similar videos")
 
     # Second fetch should be fast cached
     t1 = time.time()
@@ -115,6 +117,15 @@ def test_meta():
     assert status_c == 200
     assert dur_cached < 0.1, f"Cached meta took too long: {dur_cached}s"
     print(f"  PASSED: Instant cached metadata retrieved in {dur_cached*1000:.2f}ms")
+
+    # Test dedicated /similar endpoint
+    print("Testing /similar/movie/missav:nhdtb-213-uncensored-leak.json...")
+    status_sim, _, body_sim = fetch("/similar/movie/missav:nhdtb-213-uncensored-leak.json")
+    assert status_sim == 200
+    data_sim = json.loads(body_sim.decode())
+    assert "similar" in data_sim
+    assert len(data_sim["similar"]) > 0
+    print(f"  PASSED: Dedicated /similar endpoint returned {len(data_sim['similar'])} recommendations!")
 
     # Test transparent PNG endpoint
     status_png, headers_png, body_png = fetch("/proxy/transparent.png")
